@@ -27,7 +27,8 @@ cp -a "$bundle_directory/." "$stage_directory/usr/lib/log-classification-pipelin
 cp packaging/linux/log-classification-pipeline "$stage_directory/usr/bin/"
 cp packaging/linux/log-classification-pipeline.desktop "$stage_directory/usr/share/applications/"
 cp packaging/linux/log-classification-pipeline.svg "$stage_directory/usr/share/icons/hicolor/scalable/apps/"
-cp packaging/linux/log-classification-pipeline.appdata.xml "$stage_directory/usr/share/metainfo/"
+cp packaging/linux/io.github.rikimela1992.log-classification-pipeline.metainfo.xml \
+    "$stage_directory/usr/share/metainfo/"
 cp packaging/linux/log-classification-pipeline.service "$stage_directory/usr/lib/systemd/system/"
 cp LICENSE README.md "$stage_directory/usr/share/doc/log-classification-pipeline/"
 cp docs/web-workspace.md "$stage_directory/usr/share/doc/log-classification-pipeline/WEB_WORKSPACE.md"

@@ -53,7 +53,7 @@ systemctl daemon-reload >/dev/null 2>&1 || true
 /usr/lib/systemd/system/log-classification-pipeline.service
 /usr/share/applications/log-classification-pipeline.desktop
 /usr/share/icons/hicolor/scalable/apps/log-classification-pipeline.svg
-/usr/share/metainfo/log-classification-pipeline.appdata.xml
+/usr/share/metainfo/io.github.rikimela1992.log-classification-pipeline.metainfo.xml
 %attr(0700,log-classify,log-classify) %dir /var/lib/log-classification-pipeline
 
 %changelog

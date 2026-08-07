@@ -50,8 +50,27 @@ while IFS= read -r library; do
         package=$(rpm -qf "$system_library")
         license_files=$(rpm -ql "$package" | awk '/^\/usr\/share\/licenses\//')
         if [ -z "$license_files" ]; then
-            printf '%s\n' "cannot locate RPM license for $library" >&2
-            exit 1
+            source_rpm=$(rpm -q --queryformat '%{SOURCERPM}' "$package")
+            sibling_packages=$(
+                rpm -qa --queryformat '%{NAME}\t%{SOURCERPM}\n' \
+                    | awk -F '\t' -v source="$source_rpm" '$2 == source {print $1}'
+            )
+            for sibling_package in $sibling_packages; do
+                sibling_licenses=$(
+                    rpm -ql "$sibling_package" \
+                        | awk '/^\/usr\/share\/licenses\//'
+                )
+                if [ -n "$sibling_licenses" ]; then
+                    license_files=$(
+                        printf '%s\n%s\n' "$license_files" "$sibling_licenses" \
+                            | awk 'NF && !seen[$0]++'
+                    )
+                fi
+            done
+            if [ -z "$license_files" ]; then
+                printf '%s\n' "cannot locate RPM license for $library" >&2
+                exit 1
+            fi
         fi
         destination="$output_directory/$package.txt"
         : > "$destination"

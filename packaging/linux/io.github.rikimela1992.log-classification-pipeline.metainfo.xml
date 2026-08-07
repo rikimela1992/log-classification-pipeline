@@ -16,6 +16,7 @@
     <name>Riccardo Melini</name>
   </developer>
   <launchable type="desktop-id">log-classification-pipeline.desktop</launchable>
+  <url type="homepage">https://github.com/rikimela1992/log-classification-pipeline</url>
   <releases>
     <release version="0.1.0-alpha.1" date="2026-08-07" type="development"/>
   </releases>

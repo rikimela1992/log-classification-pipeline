@@ -49,6 +49,7 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertIn("bundle.spdx.json", workflow)
         self.assertNotIn("actions/checkout@v", workflow)
         self.assertNotIn("actions/upload-artifact@v", workflow)
+        self.assertIn("appstreamcli validate --no-net", workflow)
 
     def test_bundle_explicitly_excludes_models_and_ml_runtimes(self) -> None:
         builder = (ROOT / "packaging/build_bundle.sh").read_text(encoding="utf-8")
@@ -57,16 +58,26 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertIn("--exclude-module transformers", builder)
         self.assertIn("doctor --require web", builder)
 
-    def test_appstream_identity_is_valid_without_an_unreachable_url(self) -> None:
+        native_licenses = (
+            ROOT / "packaging/collect_native_licenses.sh"
+        ).read_text(encoding="utf-8")
+        self.assertIn("%{SOURCERPM}", native_licenses)
+        self.assertIn("sibling_packages", native_licenses)
+
+    def test_appstream_identity_filename_and_homepage_are_consistent(self) -> None:
         metadata = ElementTree.parse(
-            ROOT / "packaging/linux/log-classification-pipeline.appdata.xml"
+            ROOT
+            / "packaging/linux/io.github.rikimela1992.log-classification-pipeline.metainfo.xml"
         ).getroot()
         self.assertEqual(
             metadata.findtext("id"),
             "io.github.rikimela1992.log-classification-pipeline",
         )
         self.assertEqual(metadata.findtext("developer/name"), "Riccardo Melini")
-        self.assertIsNone(metadata.find("url"))
+        self.assertEqual(
+            metadata.findtext("url"),
+            "https://github.com/rikimela1992/log-classification-pipeline",
+        )
 
 
 if __name__ == "__main__":

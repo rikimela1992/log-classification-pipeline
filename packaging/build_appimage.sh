@@ -20,5 +20,6 @@ cp packaging/linux/AppRun "$appdir/"
 ln -s log-classification-pipeline.svg "$appdir/.DirIcon"
 chmod 755 "$appdir/AppRun"
 mkdir -p "$(dirname "$output_file")"
-ARCH=x86_64 "$appimagetool" --runtime-file "$runtime" "$appdir" "$output_file"
+ARCH=x86_64 "$appimagetool" --no-appstream --runtime-file "$runtime" \
+    "$appdir" "$output_file"
 chmod 755 "$output_file"

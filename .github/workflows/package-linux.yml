@@ -137,6 +137,8 @@ jobs:
         env:
           APPIMAGE_EXTRACT_AND_RUN: "1"
         run: |
+          appstreamcli validate --no-net \
+            packaging/linux/io.github.rikimela1992.log-classification-pipeline.metainfo.xml
           packaging/build_appimage.sh \
             build/stage \
             build/release/Log_Classification_Pipeline-${RELEASE_VERSION}-x86_64.AppImage \
