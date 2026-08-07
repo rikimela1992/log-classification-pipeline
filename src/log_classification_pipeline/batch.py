@@ -7,7 +7,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from itertools import islice
 from pathlib import Path
-from typing import Any, Protocol
+from typing import Any, Callable, Protocol
 
 from .atomic import atomic_write_jsonl
 from .contracts import PredictionContractError, validate_prediction_record
@@ -21,6 +21,10 @@ class Predictor(Protocol):
         self,
         records: Sequence[Mapping[str, Any]],
     ) -> Sequence[Mapping[str, Any]]: ...
+
+
+class BatchCancelledError(RuntimeError):
+    """Cooperative cancellation was requested between predictor chunks."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -51,6 +55,8 @@ def process_batch(
     max_input_bytes: int | None = None,
     max_records: int | None = None,
     output_mode: int = 0o600,
+    progress_callback: Callable[[int, int], None] | None = None,
+    should_cancel: Callable[[], bool] | None = None,
 ) -> BatchSummary:
     """Validate, predict, and atomically publish one complete batch."""
 
@@ -71,10 +77,15 @@ def process_batch(
         max_input_bytes=max_input_bytes,
         max_records=max_records,
     )
+    total_records = len(parsed.records)
+    if progress_callback is not None:
+        progress_callback(0, total_records)
 
     def predictions():
         output_index = 0
         for offset in range(0, len(parsed.records), batch_size):
+            if should_cancel is not None and should_cancel():
+                raise BatchCancelledError("batch cancellation requested")
             chunk = parsed.records[offset : offset + batch_size]
             predicted = predictor(chunk)
             try:
@@ -96,9 +107,14 @@ def process_batch(
                     f"got {observed}"
                 )
 
+            if should_cancel is not None and should_cancel():
+                raise BatchCancelledError("batch cancellation requested")
+
             for raw_prediction in predicted_chunk:
                 output_index += 1
                 yield validate_prediction_record(raw_prediction, output_index)
+            if progress_callback is not None:
+                progress_callback(output_index, total_records)
 
     output_count = atomic_write_jsonl(
         destination,

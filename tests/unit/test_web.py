@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import io
 import json
 import re
 import tempfile
+import threading
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
@@ -26,6 +28,10 @@ else:
         load_catalogs,
         negotiate_locale,
         translator,
+    )
+    from log_classification_pipeline.web.worker import (
+        LocalClassificationQueue,
+        WorkerUnavailableError,
     )
 
     WEB_AVAILABLE = True
@@ -61,6 +67,20 @@ class MarkupPredictor:
 class ExplodingPredictor:
     def __call__(self, _records):
         raise TypeError("synthetic internal detail that must not escape")
+
+
+class BlockingPredictor:
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.calls = 0
+
+    def __call__(self, records):
+        self.calls += 1
+        self.started.set()
+        if not self.release.wait(5.0):
+            raise RuntimeError("synthetic blocking predictor timed out")
+        return RulesPredictor()(records)
 
 
 @unittest.skipUnless(WEB_AVAILABLE, "web extra is not installed")
@@ -101,10 +121,20 @@ class WebApplicationTests(unittest.TestCase):
             base_url="http://testserver",
             raise_server_exceptions=False,
         )
+        self.client.__enter__()
 
     def tearDown(self) -> None:
-        self.client.close()
+        self.client.__exit__(None, None, None)
         self.temporary_directory.cleanup()
+
+    def wait_for_job(self, job_id: str, token: str) -> dict[str, object]:
+        self.assertTrue(self.app.state.job_queue.wait_until_idle(5.0))
+        response = self.client.get(
+            f"/api/v1/jobs/{job_id}/status",
+            headers=self.bearer(token),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        return response.json()
 
     def api_login(self, username: str, password: str) -> str:
         response = self.client.post(
@@ -171,6 +201,16 @@ class WebApplicationTests(unittest.TestCase):
         hostile = self.client.get("/health", headers={"Host": "hostile.invalid"})
         self.assertEqual(hostile.status_code, 400)
         self.assertIn("x-content-type-options", hostile.headers)
+
+    def test_web_startup_does_not_create_a_missing_workspace(self) -> None:
+        missing_parent = Path(self.temporary_directory.name) / "missing-parent"
+        missing_database = missing_parent / "workspace.sqlite3"
+        with self.assertRaises(FileNotFoundError):
+            create_app(
+                WebSettings(missing_database, allowed_hosts=("testserver",)),
+                {"rules": RulesPredictor()},
+            )
+        self.assertFalse(missing_parent.exists())
 
     def test_catalogs_negotiate_language_and_fallback_without_api_drift(self) -> None:
         catalogs = load_catalogs()
@@ -285,9 +325,11 @@ class WebApplicationTests(unittest.TestCase):
             headers=self.bearer(analyst_token),
             json={"records": [{"message": "Authentication failed"}]},
         )
-        self.assertEqual(created.status_code, 201, created.text)
-        self.assertEqual(self.predictor.calls, 1)
+        self.assertEqual(created.status_code, 202, created.text)
         job_id = created.json()["job_id"]
+        self.assertEqual(created.headers["location"], created.json()["job_url"])
+        self.assertEqual(self.wait_for_job(job_id, analyst_token)["status"], "succeeded")
+        self.assertEqual(self.predictor.calls, 1)
 
         stored = self.client.get(
             f"/api/v1/jobs/{job_id}",
@@ -314,6 +356,287 @@ class WebApplicationTests(unittest.TestCase):
         )
         self.assertEqual(admin_denied.status_code, 403)
 
+    def test_async_job_returns_before_prediction_and_cancels_fail_closed(self) -> None:
+        self.app.state.job_queue.close()
+        predictor = BlockingPredictor()
+        asynchronous_app = create_app(
+            WebSettings(
+                self.database,
+                allowed_hosts=("testserver",),
+                max_input_bytes=1_000,
+                max_records=10,
+                max_request_bytes=4_096,
+                max_admitted_jobs=2,
+                worker_batch_size=1,
+            ),
+            {"slow": predictor},
+        )
+        with TestClient(
+            asynchronous_app,
+            base_url="http://testserver",
+            raise_server_exceptions=False,
+        ) as client:
+            session = client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "analyst",
+                    "password": "analyst-password-value",
+                },
+            )
+            token = session.json()["access_token"]
+            created = client.post(
+                "/api/v1/classifications",
+                headers=self.bearer(token),
+                json={"model": "slow", "records": [{"message": "Synthetic wait"}]},
+            )
+            self.assertEqual(created.status_code, 202, created.text)
+            self.assertTrue(predictor.started.wait(1.0))
+            job_id = created.json()["job_id"]
+            running = client.get(
+                created.json()["status_url"],
+                headers=self.bearer(token),
+            )
+            self.assertEqual(running.json()["status"], "running")
+            self.assertEqual(running.json()["processed_records"], 0)
+
+            logged_out = client.delete(
+                "/api/v1/session",
+                headers=self.bearer(token),
+            )
+            self.assertEqual(logged_out.status_code, 204)
+            admin_session = client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "owner",
+                    "password": PASSWORD,
+                },
+            )
+            admin_token = admin_session.json()["access_token"]
+
+            cancelling = client.post(
+                f"/api/v1/jobs/{job_id}/cancel",
+                headers=self.bearer(admin_token),
+            )
+            self.assertEqual(cancelling.status_code, 200, cancelling.text)
+            self.assertEqual(cancelling.json()["status"], "cancelling")
+            predictor.release.set()
+            self.assertTrue(asynchronous_app.state.job_queue.wait_until_idle(5.0))
+
+            terminal = client.get(
+                created.json()["status_url"],
+                headers=self.bearer(admin_token),
+            )
+            self.assertEqual(terminal.json()["status"], "cancelled")
+            self.assertEqual(terminal.json()["failure_code"], "cancelled")
+            exported = client.get(
+                f"/api/v1/jobs/{job_id}/export",
+                headers=self.bearer(admin_token),
+            )
+            self.assertEqual(exported.status_code, 409)
+            self.assertNotIn(b"Synthetic wait", self.database.read_bytes())
+
+    def test_bounded_queue_rejects_excess_without_orphan_job(self) -> None:
+        self.app.state.job_queue.close()
+        predictor = BlockingPredictor()
+        bounded_app = create_app(
+            WebSettings(
+                self.database,
+                allowed_hosts=("testserver",),
+                max_input_bytes=1_000,
+                max_records=10,
+                max_request_bytes=4_096,
+                max_admitted_jobs=1,
+                worker_batch_size=1,
+            ),
+            {"slow": predictor},
+        )
+        with TestClient(
+            bounded_app,
+            base_url="http://testserver",
+            raise_server_exceptions=False,
+        ) as client:
+            session = client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "analyst",
+                    "password": "analyst-password-value",
+                },
+            )
+            token = session.json()["access_token"]
+            first = client.post(
+                "/api/v1/classifications",
+                headers=self.bearer(token),
+                json={"model": "slow", "records": [{"message": "First synthetic"}]},
+            )
+            self.assertEqual(first.status_code, 202, first.text)
+            self.assertTrue(predictor.started.wait(1.0))
+            rejected = client.post(
+                "/api/v1/classifications",
+                headers=self.bearer(token),
+                json={"model": "slow", "records": [{"message": "Second synthetic"}]},
+            )
+            self.assertEqual(rejected.status_code, 503, rejected.text)
+            self.assertEqual(rejected.json()["code"], "queue_full")
+            jobs = client.get("/api/v1/jobs", headers=self.bearer(token))
+            self.assertEqual(len(jobs.json()["items"]), 1)
+
+            competing_app = create_app(
+                WebSettings(
+                    self.database,
+                    allowed_hosts=("testserver",),
+                    max_input_bytes=1_000,
+                    max_records=10,
+                    max_request_bytes=4_096,
+                ),
+                {"slow": RulesPredictor()},
+            )
+            competing_client = TestClient(
+                competing_app,
+                base_url="http://testserver",
+                raise_server_exceptions=False,
+            )
+            try:
+                competing = competing_client.post(
+                    "/api/v1/classifications",
+                    headers=self.bearer(token),
+                    json={
+                        "model": "slow",
+                        "records": [{"message": "Third synthetic"}],
+                    },
+                )
+                self.assertEqual(competing.status_code, 503, competing.text)
+                self.assertEqual(competing.json()["code"], "worker_unavailable")
+            finally:
+                competing_app.state.job_queue.close()
+                competing_client.close()
+
+            predictor.release.set()
+            self.assertTrue(bounded_app.state.job_queue.wait_until_idle(5.0))
+
+    def test_worker_releases_process_lock_after_late_thread_exit(self) -> None:
+        self.app.state.job_queue.close()
+        predictor = BlockingPredictor()
+        worker = LocalClassificationQueue(
+            self.workspace,
+            {"slow": predictor},
+            max_admitted_jobs=1,
+            batch_size=1,
+        )
+        token, _ = self.workspace.login(
+            "sample-org",
+            "analyst",
+            "analyst-password-value",
+        )
+        payload = b'{"message":"Synthetic delayed shutdown"}\n'
+        worker.submit(
+            token,
+            "slow",
+            payload,
+            hashlib.sha256(payload).hexdigest(),
+            1,
+        )
+        self.assertTrue(predictor.started.wait(1.0))
+
+        worker.close(timeout=0.01)
+        self.assertIsNotNone(worker._thread)
+        self.assertTrue(worker._thread.is_alive())
+        predictor.release.set()
+        worker._thread.join(5.0)
+        self.assertFalse(worker._thread.is_alive())
+        self.assertIsNone(worker._lock_descriptor)
+
+        replacement = LocalClassificationQueue(
+            self.workspace,
+            {"rules": RulesPredictor()},
+        )
+        replacement.start()
+        replacement.close()
+
+    def test_submit_and_close_are_serialized_without_stranded_job(self) -> None:
+        self.app.state.job_queue.close()
+        predictor = BlockingPredictor()
+        worker = LocalClassificationQueue(
+            self.workspace,
+            {"slow": predictor},
+            max_admitted_jobs=1,
+            batch_size=1,
+        )
+        token, _ = self.workspace.login(
+            "sample-org",
+            "analyst",
+            "analyst-password-value",
+        )
+        payload = b'{"message":"Synthetic submit close race"}\n'
+        entered_enqueue = threading.Event()
+        allow_enqueue = threading.Event()
+        submit_result: list[str] = []
+        errors: list[BaseException] = []
+        original_enqueue = self.workspace.enqueue_classification_job
+
+        def delayed_enqueue(*args, **kwargs):
+            entered_enqueue.set()
+            if not allow_enqueue.wait(2.0):
+                raise RuntimeError("test did not release enqueue")
+            return original_enqueue(*args, **kwargs)
+
+        def submit() -> None:
+            try:
+                submit_result.append(
+                    worker.submit(
+                        token,
+                        "slow",
+                        payload,
+                        hashlib.sha256(payload).hexdigest(),
+                        1,
+                    )
+                )
+            except BaseException as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        close_started = threading.Event()
+
+        def close() -> None:
+            close_started.set()
+            worker.close()
+
+        with mock.patch.object(
+            self.workspace,
+            "enqueue_classification_job",
+            side_effect=delayed_enqueue,
+        ):
+            submit_thread = threading.Thread(target=submit)
+            submit_thread.start()
+            self.assertTrue(entered_enqueue.wait(1.0))
+            close_thread = threading.Thread(target=close)
+            close_thread.start()
+            self.assertTrue(close_started.wait(1.0))
+            self.assertTrue(close_thread.is_alive())
+            allow_enqueue.set()
+            submit_thread.join(5.0)
+
+        predictor.release.set()
+        close_thread.join(5.0)
+        self.assertFalse(submit_thread.is_alive())
+        self.assertFalse(close_thread.is_alive())
+        self.assertEqual(errors, [])
+        self.assertEqual(len(submit_result), 1)
+        terminal = self.workspace.get_job_status(token, submit_result[0])
+        self.assertEqual(terminal["status"], "failed")
+        self.assertEqual(terminal["failure_code"], "interrupted")
+        self.assertTrue(worker.wait_until_idle(1.0))
+
+        with self.assertRaises(WorkerUnavailableError):
+            worker.submit(
+                token,
+                "slow",
+                payload,
+                hashlib.sha256(payload).hexdigest(),
+                1,
+            )
+
     def test_file_upload_is_bounded_and_ignores_hostile_filename(self) -> None:
         token = self.api_login("analyst", "analyst-password-value")
         accepted = self.client.post(
@@ -328,7 +651,11 @@ class WebApplicationTests(unittest.TestCase):
                 )
             },
         )
-        self.assertEqual(accepted.status_code, 201, accepted.text)
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        self.assertEqual(
+            self.wait_for_job(accepted.json()["job_id"], token)["status"],
+            "succeeded",
+        )
 
         oversized = self.client.post(
             "/api/v1/classifications/file",
@@ -355,6 +682,12 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(schema.status_code, 200, schema.text)
         paths = schema.json()["paths"]
         self.assertIn("/api/v1/classifications", paths)
+        self.assertIn(
+            "202",
+            paths["/api/v1/classifications"]["post"]["responses"],
+        )
+        self.assertIn("/api/v1/jobs/{job_id}/status", paths)
+        self.assertIn("/api/v1/jobs/{job_id}/cancel", paths)
         self.assertTrue(all(not path.startswith("/app") for path in paths))
 
     def test_database_failure_during_authentication_returns_sanitized_503(self) -> None:
@@ -442,10 +775,11 @@ class WebApplicationTests(unittest.TestCase):
             follow_redirects=False,
         )
         self.assertEqual(created.status_code, 303, created.text)
+        self.assertTrue(self.app.state.job_queue.wait_until_idle(5.0))
         self.assertEqual(self.predictor.calls, calls_before + 1)
         detail = self.client.get(created.headers["location"])
         self.assertEqual(detail.status_code, 200)
-        self.assertIn("Completed classification", detail.text)
+        self.assertIn("Classification job", detail.text)
         self.assertNotIn("Backup completed", detail.text)
 
         logout = self.client.post(
@@ -460,6 +794,9 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(redirected.headers["location"], "/app/login")
 
     def test_ui_viewer_is_denied_before_upload_parsing_and_prediction(self) -> None:
+        admin_token, _ = self.workspace.login("sample-org", "owner", PASSWORD)
+        queued_id = self.workspace.create_job(admin_token, "4" * 64, 1)
+        self.workspace.logout(admin_token)
         self.ui_login("reviewer", "viewer-password-value")
         calls_before = self.predictor.calls
         denied = self.client.post(
@@ -470,7 +807,20 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(denied.status_code, 403)
         self.assertEqual(self.predictor.calls, calls_before)
 
+        cancel_denied = self.client.post(
+            f"/app/jobs/{queued_id}/cancel",
+            headers=self.csrf_header(),
+            follow_redirects=False,
+        )
+        self.assertEqual(cancel_denied.status_code, 403)
+        viewer_token = self.client.cookies.get("lcp_session")
+        self.assertEqual(
+            self.workspace.get_job_status(viewer_token, queued_id)["status"],
+            "queued",
+        )
+
     def test_template_autoescape_blocks_model_markup(self) -> None:
+        self.app.state.job_queue.close()
         markup_app = create_app(
             WebSettings(
                 self.database,
@@ -503,14 +853,16 @@ class WebApplicationTests(unittest.TestCase):
                     "records": [{"message": "Backup completed"}],
                 },
             )
-            self.assertEqual(created.status_code, 201, created.text)
+            self.assertEqual(created.status_code, 202, created.text)
+            self.assertTrue(markup_app.state.job_queue.wait_until_idle(5.0))
             client.cookies.set("lcp_session", token)
             detail = client.get(f'/app/jobs/{created.json()["job_id"]}')
             self.assertEqual(detail.status_code, 200, detail.text)
             self.assertNotIn("<script>alert", detail.text)
             self.assertIn("&lt;script&gt;alert", detail.text)
 
-    def test_unexpected_predictor_error_is_a_sanitized_problem(self) -> None:
+    def test_unexpected_predictor_error_becomes_sanitized_failed_job(self) -> None:
+        self.app.state.job_queue.close()
         failing_app = create_app(
             WebSettings(
                 self.database,
@@ -543,12 +895,17 @@ class WebApplicationTests(unittest.TestCase):
                     "records": [{"message": "Synthetic event"}],
                 },
             )
-            self.assertEqual(response.status_code, 500)
-            self.assertEqual(response.headers["content-type"], "application/problem+json")
-            self.assertEqual(response.json()["code"], "internal_error")
-            self.assertEqual(response.headers["x-content-type-options"], "nosniff")
-            self.assertNotIn("synthetic internal detail", response.text)
-            self.assertNotIn("Traceback", response.text)
+            self.assertEqual(response.status_code, 202, response.text)
+            self.assertTrue(failing_app.state.job_queue.wait_until_idle(5.0))
+            status = client.get(
+                response.json()["status_url"],
+                headers=self.bearer(token),
+            )
+            self.assertEqual(status.status_code, 200, status.text)
+            self.assertEqual(status.json()["status"], "failed")
+            self.assertEqual(status.json()["failure_code"], "internal_error")
+            self.assertNotIn("synthetic internal detail", status.text)
+            self.assertNotIn("Traceback", status.text)
 
     def test_admin_user_retention_and_request_limit(self) -> None:
         token = self.api_login("owner", PASSWORD)
@@ -625,6 +982,7 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(start["status"], 413)
 
     def test_secure_cookie_profile_enables_secure_and_hsts(self) -> None:
+        self.app.state.job_queue.close()
         secure_app = create_app(
             WebSettings(
                 self.database,

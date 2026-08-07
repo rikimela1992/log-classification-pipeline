@@ -100,9 +100,15 @@ log-classify workspace audit ./state/workspace.sqlite3 sample-org owner
 - Raw messages are excluded from predictions and audit details.
 - Viewer and analyst roles cannot request stored raw source bytes.
 - Job identifiers are random UUIDs and every job query is organization-scoped.
-- Classification finishes in a temporary directory before the successful job
-  and its audit event are committed in one database transaction.
-- A model or validation failure leaves no visible workspace job.
+- Synchronous CLI classification finishes in a temporary directory before the
+  successful job and its audit event are committed in one database transaction;
+  a model or validation failure in that path leaves no visible job.
+- The optional web path intentionally persists privacy-minimal queued and
+  terminal failure states for progress and diagnosis, while still publishing
+  result records only after complete success.
+- Schema v1 workspaces are migrated transactionally to v2 on explicit
+  initialization or web startup. Unknown schemas and missing web database paths
+  fail before creation or DDL.
 - The database rejects a symlink path and is restricted to the process owner.
 
 The current implementation does not protect data from the operating-system

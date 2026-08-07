@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from log_classification_pipeline.batch import process_batch
+from log_classification_pipeline.batch import BatchCancelledError, process_batch
 from log_classification_pipeline.contracts import (
     BatchResourceLimitError,
     BatchValidationError,
@@ -55,6 +55,33 @@ class BatchTests(unittest.TestCase):
             self.assertEqual(summary.output_records, 5)
             self.assertTrue(summary.batch_id.startswith("sha256:"))
             self.assertEqual(len(destination.read_text(encoding="utf-8").splitlines()), 5)
+
+    def test_progress_is_monotonic_and_cancellation_discards_staged_output(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            source = self._input(
+                directory,
+                [{"message": f"event-{index}"} for index in range(5)],
+            )
+            destination = directory / "output.jsonl"
+            predictor = RecordingPredictor()
+            progress: list[tuple[int, int]] = []
+
+            with self.assertRaises(BatchCancelledError):
+                process_batch(
+                    source,
+                    destination,
+                    predictor,
+                    batch_size=2,
+                    progress_callback=lambda processed, total: progress.append(
+                        (processed, total)
+                    ),
+                    should_cancel=lambda: bool(progress and progress[-1][0] >= 2),
+                )
+
+            self.assertEqual(progress, [(0, 5), (2, 5)])
+            self.assertEqual(len(predictor.calls), 1)
+            self.assertFalse(destination.exists())
 
     def test_invalid_input_is_rejected_before_predictor_is_called(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:

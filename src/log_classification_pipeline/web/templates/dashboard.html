@@ -32,13 +32,14 @@
   {% if jobs %}
   <div class="table-wrap">
     <table>
-      <thead><tr><th>{{ t("jobs.created") }}</th><th>{{ t("jobs.status") }}</th><th>{{ t("jobs.records") }}</th><th>{{ t("jobs.results") }}</th><th></th></tr></thead>
+      <thead><tr><th>{{ t("jobs.created") }}</th><th>{{ t("jobs.status") }}</th><th>{{ t("jobs.records") }}</th><th>{{ t("jobs.progress") }}</th><th>{{ t("jobs.results") }}</th><th></th></tr></thead>
       <tbody>
       {% for job in jobs %}
         <tr>
           <td>{{ job.created_at }}</td>
-          <td><span class="status">{{ job.status }}</span></td>
-          <td>{{ job.input_records }} → {{ job.output_records }}</td>
+          <td><span class="status status-{{ job.status }}">{{ t("status." + job.status) }}</span></td>
+          <td>{{ job.input_records }} → {{ job.output_records if job.output_records is not none else "—" }}</td>
+          <td>{{ job.processed_records }} / {{ job.input_records }}</td>
           <td>{{ t("jobs.available") if job.has_results else t("jobs.unavailable") }}</td>
           <td><a href="/app/jobs/{{ job.id }}">{{ t("jobs.open") }}</a></td>
         </tr>

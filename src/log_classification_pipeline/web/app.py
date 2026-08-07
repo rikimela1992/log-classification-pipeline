@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import secrets
 import sqlite3
 import tempfile
-import threading
+from contextlib import asynccontextmanager
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass
 from http.cookies import SimpleCookie
@@ -27,7 +28,6 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
-from ..application import classify_file_into_workspace
 from ..batch import Predictor
 from ..contracts import (
     BatchResourceLimitError,
@@ -44,7 +44,13 @@ from ..workspace import (
     Workspace,
     WorkspaceError,
 )
+from ..jsonl import ParsedBatch, read_jsonl
 from .i18n import SUPPORTED_LOCALES, load_catalogs, negotiate_locale, translator
+from .worker import (
+    LocalClassificationQueue,
+    QueueCapacityError,
+    WorkerUnavailableError,
+)
 
 
 _SESSION_COOKIE = "lcp_session"
@@ -62,6 +68,8 @@ class WebSettings:
     max_input_bytes: int = 1_000_000
     max_records: int = 1_000
     max_request_bytes: int = 1_262_144
+    max_admitted_jobs: int = 8
+    worker_batch_size: int = 16
 
     def __post_init__(self) -> None:
         if not self.allowed_hosts or any(not item for item in self.allowed_hosts):
@@ -70,6 +78,8 @@ class WebSettings:
             ("max_input_bytes", self.max_input_bytes),
             ("max_records", self.max_records),
             ("max_request_bytes", self.max_request_bytes),
+            ("max_admitted_jobs", self.max_admitted_jobs),
+            ("worker_batch_size", self.worker_batch_size),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
@@ -109,10 +119,6 @@ class RetentionRequest(BaseModel):
 
 
 class _RequestTooLarge(Exception):
-    pass
-
-
-class _ModelBusy(Exception):
     pass
 
 
@@ -446,6 +452,33 @@ async def _save_upload(upload: UploadFile, path: Path, *, max_bytes: int) -> int
     return observed
 
 
+def _read_validated_payload(
+    path: Path,
+    *,
+    max_input_bytes: int,
+    max_records: int,
+) -> tuple[bytes, ParsedBatch]:
+    parsed = read_jsonl(
+        path,
+        max_input_bytes=max_input_bytes,
+        max_records=max_records,
+    )
+    with path.open("rb") as stream:
+        payload = stream.read(max_input_bytes + 1)
+    if len(payload) > max_input_bytes:
+        raise BatchResourceLimitError(
+            "input byte count",
+            max_input_bytes,
+            observed_at_least=len(payload),
+        )
+    if not secrets.compare_digest(
+        hashlib.sha256(payload).hexdigest(),
+        parsed.source_sha256,
+    ):
+        raise RuntimeError("staged input changed after validation")
+    return payload, parsed
+
+
 def create_app(
     settings: WebSettings,
     predictors: Mapping[str, Predictor],
@@ -458,9 +491,25 @@ def create_app(
         raise ValueError("predictor names must be non-blank strings")
 
     workspace = Workspace(settings.database_path)
+    workspace.initialize(create=False)
     workspace.verify()
     model_registry = dict(predictors)
-    model_locks = {name: threading.BoundedSemaphore(1) for name in model_registry}
+    job_queue = LocalClassificationQueue(
+        workspace,
+        model_registry,
+        max_admitted_jobs=settings.max_admitted_jobs,
+        batch_size=settings.worker_batch_size,
+        max_input_bytes=settings.max_input_bytes,
+        max_records=settings.max_records,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_app: FastAPI):
+        await run_in_threadpool(job_queue.start)
+        try:
+            yield
+        finally:
+            await run_in_threadpool(job_queue.close)
 
     app = FastAPI(
         title="Log Classification Pipeline",
@@ -468,9 +517,11 @@ def create_app(
         docs_url="/api/v1/docs",
         redoc_url=None,
         openapi_url="/api/v1/openapi.json",
+        lifespan=lifespan,
     )
     app.state.workspace = workspace
     app.state.predictors = model_registry
+    app.state.job_queue = job_queue
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.max_request_bytes)
     app.add_middleware(AuthenticationPreflightMiddleware, workspace=workspace)
     app.add_middleware(
@@ -536,24 +587,35 @@ def create_app(
         workspace.principal(credentials.credentials)
         return credentials.credentials
 
-    def classify_sync(path: Path, model_name: str, token: str) -> tuple[dict[str, Any], str]:
-        predictor = model_registry.get(model_name)
-        if predictor is None:
+    def enqueue_sync(path: Path, model_name: str, token: str) -> str:
+        if model_name not in model_registry:
             raise ValueError("unknown configured model")
-        lock = model_locks[model_name]
-        if not lock.acquire(blocking=False):
-            raise _ModelBusy
-        try:
-            return classify_file_into_workspace(
-                path,
-                predictor,
-                workspace,
-                token,
-                max_input_bytes=settings.max_input_bytes,
-                max_records=settings.max_records,
-            )
-        finally:
-            lock.release()
+        payload, parsed = _read_validated_payload(
+            path,
+            max_input_bytes=settings.max_input_bytes,
+            max_records=settings.max_records,
+        )
+        return job_queue.submit(
+            token,
+            model_name,
+            payload,
+            parsed.source_sha256,
+            len(parsed.records),
+        )
+
+    def accepted_job(job_id: str) -> JSONResponse:
+        job_url = f"/api/v1/jobs/{job_id}"
+        status_url = f"/api/v1/jobs/{job_id}/status"
+        return JSONResponse(
+            status_code=202,
+            headers={"Location": job_url, "Retry-After": "1"},
+            content={
+                "job_id": job_id,
+                "job_url": job_url,
+                "status": "queued",
+                "status_url": status_url,
+            },
+        )
 
     def result_export(stored_job: dict[str, Any]) -> StreamingResponse:
         results = stored_job.get("results")
@@ -615,12 +677,24 @@ def create_app(
     async def prediction_error(_request: Request, _exc: PredictionContractError):
         return _problem_response(503, "prediction_failed", "Prediction failed closed.")
 
-    @app.exception_handler(_ModelBusy)
-    async def model_busy_error(_request: Request, _exc: _ModelBusy):
+    @app.exception_handler(QueueCapacityError)
+    async def queue_capacity_error(_request: Request, _exc: QueueCapacityError):
         return _problem_response(
             503,
-            "model_busy",
-            "The selected model is busy; retry later.",
+            "queue_full",
+            "The local classification queue is full; retry later.",
+            headers={"Retry-After": "1"},
+        )
+
+    @app.exception_handler(WorkerUnavailableError)
+    async def worker_unavailable_error(
+        _request: Request,
+        _exc: WorkerUnavailableError,
+    ):
+        return _problem_response(
+            503,
+            "worker_unavailable",
+            "The local classification worker is unavailable.",
             headers={"Retry-After": "1"},
         )
 
@@ -741,38 +815,52 @@ def create_app(
     def export_job(job_id: str, token: str = Security(api_token)):
         return result_export(workspace.get_job(token, job_id))
 
-    @app.post("/api/v1/classifications", status_code=201)
+    @app.get("/api/v1/jobs/{job_id}/status")
+    def job_status(job_id: str, token: str = Security(api_token)) -> dict[str, Any]:
+        return workspace.get_job_status(token, job_id)
+
+    def cancel_sync(token: str, job_id: str) -> dict[str, Any]:
+        status = workspace.request_job_cancellation(token, job_id)
+        if status["status"] == "cancelled":
+            job_queue.discard_queued_payload(job_id)
+        return status
+
+    @app.post("/api/v1/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str, token: str = Security(api_token)) -> dict[str, Any]:
+        return cancel_sync(token, job_id)
+
+    @app.post("/api/v1/classifications", status_code=202)
     async def classify_records(
         payload: ClassificationRequest,
         token: str = Security(api_token),
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         with tempfile.TemporaryDirectory(prefix="log-classify-web-") as directory:
             input_path = Path(directory) / "input.jsonl"
             _write_records(input_path, payload.records)
-            summary, job_id = await run_in_threadpool(
-                classify_sync,
+            job_id = await run_in_threadpool(
+                enqueue_sync,
                 input_path,
                 payload.model,
                 token,
             )
-        return {"job_id": job_id, "summary": summary}
+        return accepted_job(job_id)
 
-    @app.post("/api/v1/classifications/file", status_code=201)
+    @app.post("/api/v1/classifications/file", status_code=202)
     async def classify_file(
         upload: Annotated[UploadFile, File()],
         model: Annotated[str, Form()] = "rules",
         token: str = Security(api_token),
-    ) -> dict[str, Any]:
+    ) -> JSONResponse:
         with tempfile.TemporaryDirectory(prefix="log-classify-web-") as directory:
             input_path = Path(directory) / "input.jsonl"
             await _save_upload(upload, input_path, max_bytes=settings.max_input_bytes)
-            summary, job_id = await run_in_threadpool(
-                classify_sync,
+            job_id = await run_in_threadpool(
+                enqueue_sync,
                 input_path,
                 model,
                 token,
             )
-        return {"job_id": job_id, "summary": summary}
+        return accepted_job(job_id)
 
     @app.get("/api/v1/admin/users")
     def users(token: str = Security(api_token)) -> dict[str, Any]:
@@ -981,8 +1069,8 @@ def create_app(
         with tempfile.TemporaryDirectory(prefix="log-classify-web-") as directory:
             input_path = Path(directory) / "input.jsonl"
             await _save_upload(upload, input_path, max_bytes=settings.max_input_bytes)
-            _summary, job_id = await run_in_threadpool(
-                classify_sync,
+            job_id = await run_in_threadpool(
+                enqueue_sync,
                 input_path,
                 model,
                 token,
@@ -996,17 +1084,28 @@ def create_app(
         except AuthenticationError:
             return RedirectResponse("/app/login", status_code=303)
         stored_job = workspace.get_job(token, job_id)
-        if stored_job.get("results") is None:
-            raise ConflictError("results are unavailable")
+        status = workspace.get_job_status(token, job_id)
         return render_template(
             request,
             "job.html",
             {
                 "csrf": workspace.csrf_token(token),
                 "job": stored_job,
+                "status": status,
                 "principal": workspace.principal(token),
             },
         )
+
+    @app.get("/app/jobs/{job_id}/status", include_in_schema=False)
+    def job_status_ui(request: Request, job_id: str) -> dict[str, Any]:
+        token = cookie_token(request)
+        return workspace.get_job_status(token, job_id)
+
+    @app.post("/app/jobs/{job_id}/cancel", include_in_schema=False)
+    def cancel_job_ui(request: Request, job_id: str):
+        token = cookie_token(request)
+        cancel_sync(token, job_id)
+        return RedirectResponse(f"/app/jobs/{job_id}", status_code=303)
 
     @app.get("/app/jobs/{job_id}/export", include_in_schema=False)
     def export_job_ui(request: Request, job_id: str):

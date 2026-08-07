@@ -15,14 +15,15 @@ publication path.
 |---|---|---|
 | jsonl.py | Enforce optional byte/record limits, decode UTF-8, reject invalid JSON constructs, retain valid records, compute input identity | Reject a limit breach or collect validation issues and reject the whole batch |
 | contracts.py | Validate stable input fields and predictor output mappings | Return line-specific issues or raise a predictor contract error |
-| batch.py | Validate before prediction, chunk records, consume at most one excess output, enforce one output per input | Stop before publication if input or predictor behavior is invalid |
+| batch.py | Validate before prediction, chunk records, report staged progress, check cooperative cancellation, consume at most one excess output, enforce one output per input | Stop before publication if input, cancellation, or predictor behavior is invalid |
 | atomic.py | Encode JSONL, apply permissions, sync a temporary file, publish, sync the directory | Attempt pre-publication temporary cleanup; distinguish committed failures |
 | adapters/rules.py | Provide a deterministic wiring baseline for synthetic demos | Abstain when subsystem evidence is absent |
 | adapters/zero_shot.py | Lazy-load a pinned NLI encoder, offline by default | Fail before publication on missing artifacts or invalid model output |
 | model_profiles.py | Resolve versioned model, prompt, language, and taxonomy configurations | Reject unknown profiles before artifact loading |
 | application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
-| workspace.py | Persist complete classifications with local users, roles, sessions, retention, and audit | Deny before prediction; commit a complete job and its audit event together |
+| workspace.py | Persist versioned job states with local users, roles, sessions, retention, worker capabilities, and audit | Deny before prediction; apply state transitions and terminal results atomically |
+| web/worker.py | Run a bounded, single-worker, in-memory queue behind a process lock | Keep raw bytes out of SQLite, cancel between chunks, and fail interrupted work without partial results |
 | web/app.py / web/i18n.py | Provide an authenticated loopback API and localized server-rendered UI | Authenticate, authorize, check CSRF, validate catalogs, and enforce request limits before parsing uploads or invoking a predictor |
 
 ## Processing sequence
@@ -41,12 +42,19 @@ publication path.
 7. Flush, apply the requested mode, and sync the file; publish it without
    overwrite by default; then sync the parent directory.
 
-For workspace classification, authorization is checked before reading the
-source or invoking the predictor. The file pipeline completes in a private
-temporary directory. The normalized results, exact input/output counts, source
-digest, expiry timestamps, and success audit event are then committed in one
-SQLite transaction. A validation, prediction, authorization, or database
-failure leaves no successful workspace job.
+For web workspace classification, authorization and complete input validation
+occur before queue admission. SQLite receives a `queued` job plus only its
+digest, counts, model name, state, and a hash of an internal worker capability;
+the bearer token and source bytes are not persisted. One process-locked worker
+claims the job, stages raw bytes in a private temporary directory, and updates
+progress once per chunk. Logout does not revoke already accepted work.
+
+Cancellation moves `queued` directly to `cancelled`, or `running` to
+`cancelling` until the predictor returns to a chunk boundary. Results, exact
+counts, terminal retention timestamp, and success audit event are committed in
+one transaction only if completion wins the state-version race. Restart
+recovery marks active jobs `failed/interrupted`; it never invents a retry
+because raw queue bytes are intentionally not durable.
 
 ## Publication states
 
@@ -77,9 +85,10 @@ DDL. These checks do not defend against the owning OS account or host root.
 The web adapter is a separate optional boundary over the workspace service. It
 binds to loopback in the CLI, does not trust proxy headers, allows no CORS
 origins, and keeps API bearer authentication separate from UI cookie sessions.
-It uses one in-process semaphore per configured predictor. This bounds
-concurrent model execution, not total HTTP concurrency, and is not a remote
-deployment architecture.
+It uses one bounded process-local queue, one predictor worker, and an exclusive
+workspace lock file. A second instance cannot recover or execute the first
+instance's active jobs. Polling reads a dedicated status projection and does
+not append audit events. This is not a remote deployment architecture.
 
 ## Model boundary
 

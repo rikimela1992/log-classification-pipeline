@@ -248,6 +248,18 @@ def _parser() -> argparse.ArgumentParser:
         default=[],
         help="add a lazy zero-shot profile to the web model selector; repeatable",
     )
+    web.add_argument(
+        "--queue-capacity",
+        type=int,
+        default=8,
+        help="maximum admitted web jobs, including the running job",
+    )
+    web.add_argument(
+        "--worker-batch-size",
+        type=int,
+        default=16,
+        help="records per cancellable worker chunk",
+    )
     _add_limits(web)
     _add_adapter(web)
     _add_workspace_commands(subparsers)
@@ -422,6 +434,8 @@ def _run(args: argparse.Namespace) -> None:
                 max_input_bytes=args.max_input_bytes,
                 max_records=args.max_records,
                 max_request_bytes=args.max_input_bytes + 262_144,
+                max_admitted_jobs=args.queue_capacity,
+                worker_batch_size=args.worker_batch_size,
             ),
             predictors,
         )

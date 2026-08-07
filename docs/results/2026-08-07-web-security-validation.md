@@ -11,8 +11,8 @@ workflow, **not** a production security assessment or penetration test.
 
 | Check | Result |
 | --- | --- |
-| Complete suite with `web` and `test` extras | 118 tests passed |
-| Core-only environment | 100 tests passed; 18 web tests intentionally skipped |
+| Complete suite with `web` and `test` extras | 129 tests passed |
+| Core-only environment | 106 tests passed; 23 web tests intentionally skipped |
 | Python/TOML parsing | passed |
 | `git diff --check` | passed |
 | Local wheel build | passed |
@@ -33,6 +33,17 @@ The web integration cases cover:
 - validated English, Italian, French, and Spanish catalogs, bounded language
   negotiation, protected locale cookies, and unchanged API machine codes;
 - lazy model-profile registration without artifact loading at web startup;
+- bounded asynchronous admission, immediate `202`, persistent job states,
+  monotonic chunk progress, cooperative cancellation, and terminal-only result
+  publication;
+- hashed worker capabilities instead of queued bearer tokens, logout-independent
+  accepted work, read-only status polling, restart recovery, and a tested
+  single-instance lock;
+- hard-link database aliases rejected on every open, late worker shutdown lock
+  release, and submit/close serialization without stranded jobs;
+- queue saturation without orphan jobs, best-effort queued-byte zeroing on
+  cancellation, and missing-database startup without implicit file or directory
+  creation;
 - admin-only users, retention, purge, and audit surfaces;
 - loopback-only CLI binding with proxy headers and access logging disabled;
 - OpenAPI containing API routes but not browser UI routes.
@@ -65,7 +76,12 @@ release.
 - The server is supported only on loopback and has no brute-force rate limiter,
   TLS termination, reverse-proxy trust, or remote deployment profile.
 - SQLite and the in-process predictor are not isolation boundaries.
+- Queue source bytes are transient but can still be exposed through process
+  memory, swap, core dumps, or the owning OS account. They are not durable and
+  interrupted jobs cannot be resumed.
 - Authorization denials are not all represented as audit events.
+- A model call cannot be killed safely inside its Python thread; cancellation
+  takes effect only after the current predictor chunk returns.
 - Request duration and slow-client limits depend on the ASGI server or a future
   explicitly configured ingress boundary.
 - Multilingual model quality, load behavior, concurrent purge/view races, and

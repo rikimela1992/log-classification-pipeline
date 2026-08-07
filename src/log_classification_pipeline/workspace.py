@@ -54,9 +54,13 @@ class Role(StrEnum):
 
 
 class JobStatus(StrEnum):
-    PENDING = "pending"
+    QUEUED = "queued"
+    PENDING = "queued"
+    RUNNING = "running"
+    CANCELLING = "cancelling"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True, slots=True)
@@ -106,8 +110,9 @@ _SESSION_BYTES = 32
 _DEFAULT_SESSION_HOURS = 8
 _MAX_SESSION_HOURS = 24
 _MAX_RAW_PAYLOAD_BYTES = 1_000_000
-_SCHEMA_VERSION = "1"
-_EXPECTED_TABLES = {
+_SCHEMA_VERSION = "2"
+_SCHEMA_VERSION_V1 = "1"
+_EXPECTED_TABLES_V1 = {
     "audit_events",
     "jobs",
     "organizations",
@@ -116,6 +121,15 @@ _EXPECTED_TABLES = {
     "users",
     "workspace_metadata",
 }
+_EXPECTED_TABLES = _EXPECTED_TABLES_V1
+_JOB_FAILURE_CODES = {
+    "cancelled",
+    "input_invalidated",
+    "internal_error",
+    "interrupted",
+    "prediction_failed",
+}
+_MODEL_NAME_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@/+\-]{0,127}\Z")
 
 
 def _utc_now() -> datetime:
@@ -242,6 +256,16 @@ def _validate_source(source_sha256: str, raw_payload: bytes | None) -> None:
         raise ValueError("raw_payload does not match source_sha256")
 
 
+def _validate_model_name(model_name: str) -> None:
+    if not isinstance(model_name, str) or not _MODEL_NAME_PATTERN.fullmatch(model_name):
+        raise ValueError("model_name must be 1-128 safe identifier characters")
+
+
+def _validate_failure_code(failure_code: str) -> None:
+    if failure_code not in _JOB_FAILURE_CODES:
+        raise ValueError("unsupported job failure code")
+
+
 class Workspace:
     """SQLite-backed local workspace with tenant-scoped operations."""
 
@@ -267,6 +291,8 @@ class Workspace:
             metadata = os.fstat(descriptor)
             if not S_ISREG(metadata.st_mode):
                 raise OSError("workspace database path must be a regular file")
+            if metadata.st_nlink != 1:
+                raise OSError("workspace database must have exactly one hard link")
             if metadata.st_mode & 0o077:
                 raise OSError("workspace database must have mode 0o600 or stricter")
         finally:
@@ -317,12 +343,18 @@ class Workspace:
         finally:
             connection.close()
 
-    def initialize(self) -> None:
-        """Create the schema and restrict an existing database file to its owner."""
+    def initialize(self, *, create: bool = True) -> None:
+        """Create or migrate the schema while preserving private file semantics."""
+
+        if not isinstance(create, bool):
+            raise TypeError("create must be a boolean")
 
         if self.database_path.is_symlink():
             raise OSError("refusing a symlink workspace database")
-        self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        if create:
+            self.database_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+        elif not self.database_path.parent.is_dir():
+            raise FileNotFoundError("workspace database directory does not exist")
         parent_mode = self.database_path.parent.stat().st_mode
         if parent_mode & 0o022:
             raise OSError("workspace database directory must not be group/world writable")
@@ -330,12 +362,16 @@ class Workspace:
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
-            database_fd = os.open(
-                self.database_path,
-                flags | os.O_CREAT | os.O_EXCL,
-                0o600,
-            )
-            database_created = True
+            if not create:
+                database_fd = os.open(self.database_path, flags)
+                database_created = False
+            else:
+                database_fd = os.open(
+                    self.database_path,
+                    flags | os.O_CREAT | os.O_EXCL,
+                    0o600,
+                )
+                database_created = True
         except FileExistsError:
             try:
                 database_fd = os.open(self.database_path, flags)
@@ -352,6 +388,8 @@ class Workspace:
             metadata = os.fstat(database_fd)
             if not S_ISREG(metadata.st_mode):
                 raise OSError("workspace database path must be a regular file")
+            if metadata.st_nlink != 1:
+                raise OSError("workspace database must have exactly one hard link")
             if database_created:
                 os.fchmod(database_fd, 0o600)
             elif metadata.st_mode & 0o077:
@@ -374,17 +412,103 @@ class Workspace:
                 schema_row = connection.execute(
                     "SELECT value FROM workspace_metadata WHERE key = 'schema_version'"
                 ).fetchone()
-                if schema_row is None or schema_row["value"] != _SCHEMA_VERSION:
-                    observed = None if schema_row is None else schema_row["value"]
+                observed = None if schema_row is None else schema_row["value"]
+                if observed not in {_SCHEMA_VERSION_V1, _SCHEMA_VERSION}:
                     raise WorkspaceError(
                         f"unsupported workspace schema version {observed!r}"
                     )
-                if existing_tables != _EXPECTED_TABLES:
+                expected_tables = (
+                    _EXPECTED_TABLES_V1
+                    if observed == _SCHEMA_VERSION_V1
+                    else _EXPECTED_TABLES
+                )
+                if existing_tables != expected_tables:
                     raise WorkspaceError("workspace schema is incomplete or unexpected")
             connection.execute("PRAGMA foreign_keys = ON")
             connection.execute("PRAGMA secure_delete = ON")
             connection.execute("PRAGMA journal_mode = DELETE")
             connection.execute("PRAGMA synchronous = FULL")
+            if existing_tables and observed == _SCHEMA_VERSION:
+                return
+            if existing_tables and observed == _SCHEMA_VERSION_V1:
+                connection.executescript(
+                    """
+                    BEGIN IMMEDIATE;
+                    ALTER TABLE jobs RENAME TO jobs_v1;
+
+                    CREATE TABLE jobs (
+                        id TEXT PRIMARY KEY,
+                        organization_id TEXT NOT NULL REFERENCES organizations(id),
+                        created_by TEXT NOT NULL REFERENCES users(id),
+                        status TEXT NOT NULL CHECK (status IN
+                            ('queued', 'running', 'cancelling', 'succeeded', 'failed', 'cancelled')),
+                        model_name TEXT NOT NULL,
+                        source_sha256 TEXT NOT NULL,
+                        input_records INTEGER NOT NULL CHECK (input_records > 0),
+                        processed_records INTEGER NOT NULL DEFAULT 0,
+                        output_records INTEGER,
+                        raw_payload BLOB,
+                        raw_expires_at TEXT,
+                        raw_retention_days INTEGER NOT NULL CHECK (raw_retention_days BETWEEN 1 AND 3650),
+                        results_json TEXT,
+                        results_expires_at TEXT,
+                        result_retention_days INTEGER NOT NULL CHECK (result_retention_days BETWEEN 1 AND 3650),
+                        worker_capability_hash TEXT UNIQUE,
+                        worker_id TEXT,
+                        cancel_requested_at TEXT,
+                        failure_code TEXT CHECK (failure_code IS NULL OR failure_code IN
+                            ('cancelled', 'input_invalidated', 'internal_error', 'interrupted', 'prediction_failed')),
+                        state_version INTEGER NOT NULL DEFAULT 0 CHECK (state_version >= 0),
+                        created_at TEXT NOT NULL,
+                        queued_at TEXT NOT NULL,
+                        started_at TEXT,
+                        updated_at TEXT NOT NULL,
+                        completed_at TEXT,
+                        CHECK (processed_records >= 0 AND processed_records <= input_records),
+                        CHECK (
+                            (status = 'succeeded' AND results_json IS NOT NULL
+                                AND output_records = input_records)
+                            OR
+                            (status != 'succeeded' AND results_json IS NULL
+                                AND output_records IS NULL)
+                        )
+                    );
+
+                    INSERT INTO jobs (
+                        id, organization_id, created_by, status, model_name,
+                        source_sha256, input_records, processed_records, output_records,
+                        raw_payload, raw_expires_at, raw_retention_days,
+                        results_json, results_expires_at, result_retention_days,
+                        failure_code, created_at, queued_at, started_at, updated_at,
+                        completed_at
+                    )
+                    SELECT
+                        id, organization_id, created_by,
+                        CASE WHEN status = 'pending' THEN 'failed' ELSE status END,
+                        'legacy', source_sha256, input_records,
+                        COALESCE(output_records, 0), output_records,
+                        raw_payload, raw_expires_at, 30,
+                        results_json, results_expires_at, 90,
+                        CASE
+                            WHEN status = 'pending' THEN 'interrupted'
+                            WHEN status = 'failed' THEN 'internal_error'
+                            ELSE NULL
+                        END,
+                        created_at, created_at,
+                        CASE WHEN status = 'pending' THEN NULL ELSE created_at END,
+                        COALESCE(completed_at, created_at),
+                        CASE WHEN status = 'pending' THEN created_at ELSE completed_at END
+                    FROM jobs_v1;
+
+                    DROP TABLE jobs_v1;
+                    CREATE INDEX jobs_organization_created
+                        ON jobs (organization_id, created_at DESC);
+                    UPDATE workspace_metadata SET value = '2'
+                        WHERE key = 'schema_version';
+                    COMMIT;
+                    """
+                )
+                return
             connection.executescript(
                 """
                 BEGIN IMMEDIATE;
@@ -431,16 +555,38 @@ class Workspace:
                     id TEXT PRIMARY KEY,
                     organization_id TEXT NOT NULL REFERENCES organizations(id),
                     created_by TEXT NOT NULL REFERENCES users(id),
-                    status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+                    status TEXT NOT NULL CHECK (status IN
+                        ('queued', 'running', 'cancelling', 'succeeded', 'failed', 'cancelled')),
+                    model_name TEXT NOT NULL,
                     source_sha256 TEXT NOT NULL,
                     input_records INTEGER NOT NULL CHECK (input_records > 0),
-                    output_records INTEGER CHECK (output_records >= 0),
+                    processed_records INTEGER NOT NULL DEFAULT 0,
+                    output_records INTEGER,
                     raw_payload BLOB,
-                    raw_expires_at TEXT NOT NULL,
+                    raw_expires_at TEXT,
+                    raw_retention_days INTEGER NOT NULL CHECK (raw_retention_days BETWEEN 1 AND 3650),
                     results_json TEXT,
-                    results_expires_at TEXT NOT NULL,
+                    results_expires_at TEXT,
+                    result_retention_days INTEGER NOT NULL CHECK (result_retention_days BETWEEN 1 AND 3650),
+                    worker_capability_hash TEXT UNIQUE,
+                    worker_id TEXT,
+                    cancel_requested_at TEXT,
+                    failure_code TEXT CHECK (failure_code IS NULL OR failure_code IN
+                        ('cancelled', 'input_invalidated', 'internal_error', 'interrupted', 'prediction_failed')),
+                    state_version INTEGER NOT NULL DEFAULT 0 CHECK (state_version >= 0),
                     created_at TEXT NOT NULL,
-                    completed_at TEXT
+                    queued_at TEXT NOT NULL,
+                    started_at TEXT,
+                    updated_at TEXT NOT NULL,
+                    completed_at TEXT,
+                    CHECK (processed_records >= 0 AND processed_records <= input_records),
+                    CHECK (
+                        (status = 'succeeded' AND results_json IS NOT NULL
+                            AND output_records = input_records)
+                        OR
+                        (status != 'succeeded' AND results_json IS NULL
+                            AND output_records IS NULL)
+                    )
                 );
 
                 CREATE INDEX IF NOT EXISTS jobs_organization_created
@@ -461,7 +607,9 @@ class Workspace:
                     ON audit_events (organization_id, occurred_at DESC);
 
                 INSERT OR IGNORE INTO workspace_metadata (key, value)
-                    VALUES ('schema_version', '1');
+                    VALUES ('schema_version', '2');
+                UPDATE workspace_metadata SET value = '2'
+                    WHERE key = 'schema_version';
 
                 COMMIT;
                 """
@@ -907,6 +1055,7 @@ class Workspace:
         input_records: int,
         *,
         raw_payload: bytes | None = None,
+        model_name: str = "manual",
         now: datetime | None = None,
     ) -> str:
         principal = self.principal(token, now=now)
@@ -915,25 +1064,32 @@ class Workspace:
             self._require(principal, Role.ADMIN)
         _validate_input_records(input_records)
         _validate_source(source_sha256, raw_payload)
+        _validate_model_name(model_name)
         policy = self.get_retention_policy(token, now=now)
         instant = now or _utc_now()
         job_id = str(uuid4())
         with self._connect() as connection:
             connection.execute(
                 """INSERT INTO jobs
-                   (id, organization_id, created_by, status, source_sha256, input_records,
-                    raw_payload, raw_expires_at, results_expires_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, organization_id, created_by, status, model_name,
+                    source_sha256, input_records, processed_records,
+                    raw_payload, raw_expires_at, raw_retention_days,
+                    result_retention_days, created_at, queued_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job_id,
                     principal.organization_id,
                     principal.user_id,
-                    JobStatus.PENDING.value,
+                    JobStatus.QUEUED.value,
+                    model_name,
                     source_sha256,
                     input_records,
                     raw_payload,
                     _timestamp(instant + timedelta(days=policy.raw_days)),
-                    _timestamp(instant + timedelta(days=policy.result_days)),
+                    policy.raw_days,
+                    policy.result_days,
+                    _timestamp(instant),
+                    _timestamp(instant),
                     _timestamp(instant),
                 ),
             )
@@ -977,9 +1133,10 @@ class Workspace:
         instant = now or _utc_now()
         with self._connect() as connection:
             job_row = connection.execute(
-                """SELECT input_records FROM jobs
-                   WHERE id = ? AND organization_id = ? AND status = ?""",
-                (job_id, principal.organization_id, JobStatus.PENDING.value),
+                """SELECT input_records, result_retention_days FROM jobs
+                   WHERE id = ? AND organization_id = ? AND status = ?
+                     AND worker_capability_hash IS NULL""",
+                (job_id, principal.organization_id, JobStatus.QUEUED.value),
             ).fetchone()
             if job_row is None:
                 raise NotFoundError("pending job not found")
@@ -989,16 +1146,23 @@ class Workspace:
                 )
             cursor = connection.execute(
                 """UPDATE jobs SET status = ?, results_json = ?, output_records = ?,
-                                  completed_at = ?
-                   WHERE id = ? AND organization_id = ? AND status = ?""",
+                                  processed_records = input_records,
+                                  results_expires_at = ?,
+                                  updated_at = ?, completed_at = ?, state_version = state_version + 1
+                   WHERE id = ? AND organization_id = ? AND status = ?
+                     AND worker_capability_hash IS NULL""",
                 (
                     JobStatus.SUCCEEDED.value,
                     encoded_results,
                     len(normalized_results),
+                    _timestamp(
+                        instant + timedelta(days=job_row["result_retention_days"])
+                    ),
+                    _timestamp(instant),
                     _timestamp(instant),
                     job_id,
                     principal.organization_id,
-                    JobStatus.PENDING.value,
+                    JobStatus.QUEUED.value,
                 ),
             )
             if cursor.rowcount != 1:
@@ -1022,6 +1186,7 @@ class Workspace:
         results: list[dict[str, Any]],
         *,
         raw_payload: bytes | None = None,
+        model_name: str = "direct",
         now: datetime | None = None,
     ) -> str:
         """Atomically store one already completed, fully validated classification."""
@@ -1032,6 +1197,7 @@ class Workspace:
             self._require(principal, Role.ADMIN)
         _validate_input_records(input_records)
         _validate_source(source_sha256, raw_payload)
+        _validate_model_name(model_name)
         if not isinstance(results, list):
             raise TypeError("results must be a list of classification objects")
         normalized_results = [
@@ -1055,23 +1221,31 @@ class Workspace:
         with self._connect() as connection:
             connection.execute(
                 """INSERT INTO jobs
-                   (id, organization_id, created_by, status, source_sha256,
-                    input_records, output_records,
-                    raw_payload, raw_expires_at, results_json, results_expires_at,
-                    created_at, completed_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   (id, organization_id, created_by, status, model_name,
+                    source_sha256, input_records, processed_records, output_records,
+                    raw_payload, raw_expires_at, raw_retention_days,
+                    results_json, results_expires_at, result_retention_days,
+                    created_at, queued_at, started_at, updated_at, completed_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     job_id,
                     principal.organization_id,
                     principal.user_id,
                     JobStatus.SUCCEEDED.value,
+                    model_name,
                     source_sha256,
                     input_records,
                     len(normalized_results),
+                    len(normalized_results),
                     raw_payload,
                     _timestamp(instant + timedelta(days=policy.raw_days)),
+                    policy.raw_days,
                     encoded_results,
                     _timestamp(instant + timedelta(days=policy.result_days)),
+                    policy.result_days,
+                    _timestamp(instant),
+                    _timestamp(instant),
+                    _timestamp(instant),
                     _timestamp(instant),
                     _timestamp(instant),
                 ),
@@ -1092,6 +1266,491 @@ class Workspace:
             )
         return job_id
 
+    def enqueue_classification_job(
+        self,
+        token: str,
+        source_sha256: str,
+        input_records: int,
+        model_name: str,
+        *,
+        now: datetime | None = None,
+    ) -> tuple[str, str]:
+        """Persist a queued job and return an internal, unhashed worker capability."""
+
+        principal = self.authorize_classification(token, now=now)
+        _validate_input_records(input_records)
+        _validate_source(source_sha256, None)
+        _validate_model_name(model_name)
+        policy = self.get_retention_policy(token, now=now)
+        instant = now or _utc_now()
+        job_id = str(uuid4())
+        capability = secrets.token_urlsafe(32)
+        with self._connect() as connection:
+            connection.execute(
+                """INSERT INTO jobs
+                   (id, organization_id, created_by, status, model_name,
+                    source_sha256, input_records, processed_records,
+                    raw_retention_days, result_retention_days,
+                    worker_capability_hash, state_version,
+                    created_at, queued_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?, ?)""",
+                (
+                    job_id,
+                    principal.organization_id,
+                    principal.user_id,
+                    JobStatus.QUEUED.value,
+                    model_name,
+                    source_sha256,
+                    input_records,
+                    policy.raw_days,
+                    policy.result_days,
+                    _token_hash(capability),
+                    _timestamp(instant),
+                    _timestamp(instant),
+                    _timestamp(instant),
+                ),
+            )
+            self._audit(
+                connection,
+                principal.organization_id,
+                principal.user_id,
+                "job.enqueue",
+                "job",
+                job_id,
+                instant,
+                {"input_records": input_records, "model_name": model_name},
+            )
+        return job_id, capability
+
+    def claim_classification_job(
+        self,
+        capability: str,
+        worker_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Atomically claim one queued job using its internal capability."""
+
+        _validate_model_name(worker_id)
+        try:
+            capability_hash = _token_hash(capability)
+        except (AttributeError, UnicodeEncodeError) as exc:
+            raise NotFoundError("queued job not found") from exc
+        instant = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, organization_id, created_by, model_name,
+                          source_sha256, input_records, state_version
+                   FROM jobs WHERE worker_capability_hash = ? AND status = ?
+                     AND cancel_requested_at IS NULL""",
+                (capability_hash, JobStatus.QUEUED.value),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("queued job not found")
+            cursor = connection.execute(
+                """UPDATE jobs SET status = ?, worker_id = ?, started_at = ?,
+                                  updated_at = ?, state_version = state_version + 1
+                   WHERE id = ? AND status = ? AND state_version = ?""",
+                (
+                    JobStatus.RUNNING.value,
+                    worker_id,
+                    _timestamp(instant),
+                    _timestamp(instant),
+                    row["id"],
+                    JobStatus.QUEUED.value,
+                    row["state_version"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("job claim lost a concurrent transition")
+            self._audit(
+                connection,
+                row["organization_id"],
+                row["created_by"],
+                "job.start",
+                "job",
+                row["id"],
+                instant,
+                {"model_name": row["model_name"]},
+            )
+        return {
+            "id": row["id"],
+            "model_name": row["model_name"],
+            "source_sha256": row["source_sha256"],
+            "input_records": row["input_records"],
+        }
+
+    def update_classification_progress(
+        self,
+        capability: str,
+        processed_records: int,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Persist monotonic chunk progress; return false after cancellation."""
+
+        if isinstance(processed_records, bool) or not isinstance(processed_records, int):
+            raise ValueError("processed_records must be an integer")
+        try:
+            capability_hash = _token_hash(capability)
+        except (AttributeError, UnicodeEncodeError) as exc:
+            raise NotFoundError("running job not found") from exc
+        instant = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, status, input_records, processed_records,
+                          cancel_requested_at, state_version
+                   FROM jobs WHERE worker_capability_hash = ?""",
+                (capability_hash,),
+            ).fetchone()
+            if row is None:
+                return False
+            if row["status"] != JobStatus.RUNNING.value or row["cancel_requested_at"]:
+                return False
+            if not row["processed_records"] <= processed_records <= row["input_records"]:
+                raise ValueError("processed_records must be monotonic and bounded")
+            cursor = connection.execute(
+                """UPDATE jobs SET processed_records = ?, updated_at = ?,
+                                  state_version = state_version + 1
+                   WHERE id = ? AND status = ? AND state_version = ?""",
+                (
+                    processed_records,
+                    _timestamp(instant),
+                    row["id"],
+                    JobStatus.RUNNING.value,
+                    row["state_version"],
+                ),
+            )
+            return cursor.rowcount == 1
+
+    def classification_cancel_requested(self, capability: str) -> bool:
+        try:
+            capability_hash = _token_hash(capability)
+        except (AttributeError, UnicodeEncodeError):
+            return True
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT status, cancel_requested_at FROM jobs
+                   WHERE worker_capability_hash = ?""",
+                (capability_hash,),
+            ).fetchone()
+        return (
+            row is None
+            or row["status"] != JobStatus.RUNNING.value
+            or row["cancel_requested_at"] is not None
+        )
+
+    def complete_classification_job(
+        self,
+        capability: str,
+        source_sha256: str,
+        results: list[dict[str, Any]],
+        *,
+        now: datetime | None = None,
+    ) -> str:
+        """Atomically publish validated results if cancellation has not won."""
+
+        _validate_source(source_sha256, None)
+        if not isinstance(results, list):
+            raise TypeError("results must be a list of classification objects")
+        normalized_results = [
+            validate_classification_prediction(item, index)
+            for index, item in enumerate(results, start=1)
+        ]
+        try:
+            encoded_results = json.dumps(
+                normalized_results,
+                ensure_ascii=False,
+                allow_nan=False,
+                separators=(",", ":"),
+            )
+            capability_hash = _token_hash(capability)
+        except (TypeError, ValueError, UnicodeEncodeError) as exc:
+            raise ValueError("results and capability must be valid") from exc
+        instant = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, organization_id, created_by, source_sha256,
+                          input_records, result_retention_days, state_version
+                   FROM jobs WHERE worker_capability_hash = ? AND status = ?
+                     AND cancel_requested_at IS NULL""",
+                (capability_hash, JobStatus.RUNNING.value),
+            ).fetchone()
+            if row is None:
+                raise ConflictError("running job cannot be completed")
+            if not hmac.compare_digest(row["source_sha256"], source_sha256):
+                raise ValueError("worker source digest does not match queued job")
+            if len(normalized_results) != row["input_records"]:
+                raise ValueError("result count must exactly match input_records")
+            cursor = connection.execute(
+                """UPDATE jobs SET status = ?, processed_records = input_records,
+                                  output_records = input_records, results_json = ?,
+                                  results_expires_at = ?, worker_capability_hash = NULL,
+                                  worker_id = NULL, updated_at = ?, completed_at = ?,
+                                  state_version = state_version + 1
+                   WHERE id = ? AND status = ? AND state_version = ?
+                     AND cancel_requested_at IS NULL""",
+                (
+                    JobStatus.SUCCEEDED.value,
+                    encoded_results,
+                    _timestamp(
+                        instant + timedelta(days=row["result_retention_days"])
+                    ),
+                    _timestamp(instant),
+                    _timestamp(instant),
+                    row["id"],
+                    JobStatus.RUNNING.value,
+                    row["state_version"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                raise ConflictError("job completion lost a concurrent transition")
+            self._audit(
+                connection,
+                row["organization_id"],
+                row["created_by"],
+                "job.complete",
+                "job",
+                row["id"],
+                instant,
+                {"result_count": len(normalized_results)},
+            )
+        return row["id"]
+
+    def fail_classification_job(
+        self,
+        capability: str,
+        failure_code: str,
+        *,
+        now: datetime | None = None,
+    ) -> bool:
+        """Move a worker-owned active job to a sanitized terminal state."""
+
+        _validate_failure_code(failure_code)
+        try:
+            capability_hash = _token_hash(capability)
+        except (AttributeError, UnicodeEncodeError):
+            return False
+        instant = now or _utc_now()
+        terminal_status = (
+            JobStatus.CANCELLED.value
+            if failure_code == "cancelled"
+            else JobStatus.FAILED.value
+        )
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, organization_id, created_by, result_retention_days,
+                          state_version FROM jobs
+                   WHERE worker_capability_hash = ? AND status IN (?, ?, ?)""",
+                (
+                    capability_hash,
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.CANCELLING.value,
+                ),
+            ).fetchone()
+            if row is None:
+                return False
+            cursor = connection.execute(
+                """UPDATE jobs SET status = ?, failure_code = ?,
+                                  results_expires_at = ?, worker_capability_hash = NULL,
+                                  worker_id = NULL, updated_at = ?, completed_at = ?,
+                                  state_version = state_version + 1
+                   WHERE id = ? AND state_version = ?""",
+                (
+                    terminal_status,
+                    failure_code,
+                    _timestamp(
+                        instant + timedelta(days=row["result_retention_days"])
+                    ),
+                    _timestamp(instant),
+                    _timestamp(instant),
+                    row["id"],
+                    row["state_version"],
+                ),
+            )
+            if cursor.rowcount != 1:
+                return False
+            self._audit(
+                connection,
+                row["organization_id"],
+                row["created_by"],
+                "job.cancel" if terminal_status == JobStatus.CANCELLED.value else "job.fail",
+                "job",
+                row["id"],
+                instant,
+                {"failure_code": failure_code},
+            )
+        return True
+
+    def request_job_cancellation(
+        self,
+        token: str,
+        job_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Cancel a queued job or request cancellation at the next chunk boundary."""
+
+        principal = self.principal(token, now=now)
+        self._require(principal, Role.ADMIN, Role.ANALYST)
+        instant = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, created_by, status, result_retention_days, state_version
+                   FROM jobs WHERE id = ? AND organization_id = ?
+                     AND (results_expires_at IS NULL OR results_expires_at > ?)""",
+                (job_id, principal.organization_id, _timestamp(instant)),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("job not found")
+            if principal.role is Role.ANALYST and row["created_by"] != principal.user_id:
+                raise AuthorizationError("analysts can cancel only their own jobs")
+            target_status = row["status"]
+            changed = False
+            if row["status"] == JobStatus.QUEUED.value:
+                target_status = JobStatus.CANCELLED.value
+                cursor = connection.execute(
+                    """UPDATE jobs SET status = ?, failure_code = 'cancelled',
+                                      cancel_requested_at = ?, results_expires_at = ?,
+                                      worker_capability_hash = NULL, updated_at = ?,
+                                      completed_at = ?, state_version = state_version + 1
+                       WHERE id = ? AND status = ? AND state_version = ?""",
+                    (
+                        target_status,
+                        _timestamp(instant),
+                        _timestamp(
+                            instant + timedelta(days=row["result_retention_days"])
+                        ),
+                        _timestamp(instant),
+                        _timestamp(instant),
+                        row["id"],
+                        JobStatus.QUEUED.value,
+                        row["state_version"],
+                    ),
+                )
+                changed = cursor.rowcount == 1
+            elif row["status"] == JobStatus.RUNNING.value:
+                target_status = JobStatus.CANCELLING.value
+                cursor = connection.execute(
+                    """UPDATE jobs SET status = ?, cancel_requested_at = ?,
+                                      updated_at = ?, state_version = state_version + 1
+                       WHERE id = ? AND status = ? AND state_version = ?""",
+                    (
+                        target_status,
+                        _timestamp(instant),
+                        _timestamp(instant),
+                        row["id"],
+                        JobStatus.RUNNING.value,
+                        row["state_version"],
+                    ),
+                )
+                changed = cursor.rowcount == 1
+            if changed:
+                self._audit(
+                    connection,
+                    principal.organization_id,
+                    principal.user_id,
+                    "job.cancel_request",
+                    "job",
+                    job_id,
+                    instant,
+                    {"status": target_status},
+                )
+        return self.get_job_status(token, job_id, now=instant)
+
+    def get_job_status(
+        self,
+        token: str,
+        job_id: str,
+        *,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Read polling metadata without generating an audit event."""
+
+        principal = self.principal(token, now=now)
+        instant = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, created_by, status, model_name, input_records,
+                          processed_records, failure_code, created_at, queued_at,
+                          started_at, updated_at, completed_at
+                   FROM jobs WHERE id = ? AND organization_id = ?
+                     AND (results_expires_at IS NULL OR results_expires_at > ?)""",
+                (job_id, principal.organization_id, _timestamp(instant)),
+            ).fetchone()
+        if row is None:
+            raise NotFoundError("job not found")
+        active = row["status"] in {
+            JobStatus.QUEUED.value,
+            JobStatus.RUNNING.value,
+            JobStatus.CANCELLING.value,
+        }
+        return {
+            "id": row["id"],
+            "status": row["status"],
+            "model_name": row["model_name"],
+            "processed_records": row["processed_records"],
+            "input_records": row["input_records"],
+            "failure_code": row["failure_code"],
+            "can_cancel": active and (
+                principal.role is Role.ADMIN or row["created_by"] == principal.user_id
+            ),
+            "created_at": row["created_at"],
+            "queued_at": row["queued_at"],
+            "started_at": row["started_at"],
+            "updated_at": row["updated_at"],
+            "completed_at": row["completed_at"],
+        }
+
+    def recover_incomplete_jobs(self, *, now: datetime | None = None) -> int:
+        """Fail jobs left active by a previous single worker instance."""
+
+        instant = now or _utc_now()
+        recovered = 0
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, organization_id, result_retention_days, state_version
+                   FROM jobs WHERE status IN (?, ?, ?)""",
+                (
+                    JobStatus.QUEUED.value,
+                    JobStatus.RUNNING.value,
+                    JobStatus.CANCELLING.value,
+                ),
+            ).fetchall()
+            for row in rows:
+                cursor = connection.execute(
+                    """UPDATE jobs SET status = ?, failure_code = 'interrupted',
+                                      results_expires_at = ?, worker_capability_hash = NULL,
+                                      worker_id = NULL, updated_at = ?, completed_at = ?,
+                                      state_version = state_version + 1
+                       WHERE id = ? AND state_version = ?""",
+                    (
+                        JobStatus.FAILED.value,
+                        _timestamp(
+                            instant + timedelta(days=row["result_retention_days"])
+                        ),
+                        _timestamp(instant),
+                        _timestamp(instant),
+                        row["id"],
+                        row["state_version"],
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    continue
+                recovered += 1
+                self._audit(
+                    connection,
+                    row["organization_id"],
+                    None,
+                    "job.recover",
+                    "job",
+                    row["id"],
+                    instant,
+                    {"failure_code": "interrupted"},
+                )
+        return recovered
+
     def get_job(
         self,
         token: str,
@@ -1107,11 +1766,15 @@ class Workspace:
         instant_timestamp = _timestamp(instant)
         with self._connect() as connection:
             row = connection.execute(
-                """SELECT id, status, source_sha256, input_records, output_records,
+                """SELECT id, status, model_name, source_sha256,
+                          input_records, processed_records, output_records,
                           raw_payload, raw_expires_at,
-                          results_json, results_expires_at, created_at, completed_at
+                          results_json, results_expires_at, failure_code,
+                          created_at, queued_at, started_at, updated_at, completed_at,
+                          cancel_requested_at
                    FROM jobs
-                   WHERE id = ? AND organization_id = ? AND results_expires_at > ?""",
+                   WHERE id = ? AND organization_id = ?
+                     AND (results_expires_at IS NULL OR results_expires_at > ?)""",
                 (job_id, principal.organization_id, instant_timestamp),
             ).fetchone()
             if row is None:
@@ -1138,14 +1801,21 @@ class Workspace:
         result: dict[str, Any] = {
             "id": row["id"],
             "status": row["status"],
+            "model_name": row["model_name"],
             "source_sha256": row["source_sha256"],
             "input_records": row["input_records"],
+            "processed_records": row["processed_records"],
             "output_records": row["output_records"],
+            "failure_code": row["failure_code"],
             "results": (
                 json.loads(row["results_json"]) if results_included else None
             ),
             "created_at": row["created_at"],
+            "queued_at": row["queued_at"],
+            "started_at": row["started_at"],
+            "updated_at": row["updated_at"],
             "completed_at": row["completed_at"],
+            "cancel_requested_at": row["cancel_requested_at"],
         }
         if include_raw:
             result["raw_payload"] = (
@@ -1173,10 +1843,13 @@ class Workspace:
         with self._connect() as connection:
             instant_timestamp = _timestamp(now or _utc_now())
             rows = connection.execute(
-                """SELECT id, status, source_sha256, input_records, output_records,
-                          created_at, completed_at,
+                """SELECT id, status, model_name, source_sha256,
+                          input_records, processed_records, output_records,
+                          failure_code, created_at, queued_at, started_at,
+                          updated_at, completed_at,
                           (results_json IS NOT NULL) AS has_results
-                   FROM jobs WHERE organization_id = ? AND results_expires_at > ?
+                   FROM jobs WHERE organization_id = ?
+                     AND (results_expires_at IS NULL OR results_expires_at > ?)
                    ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""",
                 (principal.organization_id, instant_timestamp, limit, offset),
             ).fetchall()

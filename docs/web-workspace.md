@@ -27,6 +27,14 @@ Open `http://127.0.0.1:8080/app`. The command binds only to `127.0.0.1`, disable
 proxy-header trust and access logging, and refuses an unknown or unsafe
 workspace database. Stop it with `Ctrl-C`.
 
+The default queue admits at most eight jobs, including the one running job,
+and reports progress every 16 records. Both values are explicit CLI controls:
+
+```console
+.venv/bin/log-classify web ./state/workspace.sqlite3 \
+  --queue-capacity 8 --worker-batch-size 16
+```
+
 The rules baseline is available without model dependencies. To expose the two
 known profiles in the selector, install both extras and enable them. Predictors
 remain lazy and downloads remain disabled by default:
@@ -49,13 +57,19 @@ remain outside this repository.
 | --- | --- | --- | --- |
 | Consult and export stored results | yes | yes | yes |
 | Upload and classify JSONL | yes | yes | no |
+| Cancel own active job | yes | yes | no |
+| Cancel another user's active job | yes | no | no |
 | Create users and change retention | yes | no | no |
 | Read the audit trail | yes | no | no |
 
-The web surface never requests raw-source retention and never exports source
-messages. Uploads are staged in private temporary files, bounded before model
-invocation, and removed after the request. Stored results contain labels,
-scores, abstention, declared model provenance, counts, and a source digest.
+The web surface never requests durable raw-source retention and never exports
+source messages. After complete validation, bounded source bytes wait only in
+the process-local in-memory queue. The worker uses a private `0600` temporary
+file and removes it after execution. Raw bytes and bearer tokens are never
+stored in SQLite; a job stores only the source digest, counts, model name,
+state, timestamps, sanitized failure code, and an internal capability hash.
+RAM is not an erasure boundary: the source can still be visible to the owning
+OS account, swap, a core dump, or malicious code in the process.
 
 ## HTTP API
 
@@ -66,19 +80,22 @@ only in the session-creation response; the database stores their SHA-256
 digests. `DELETE /api/v1/session` revokes the current session.
 
 The API accepts either JSON records at `/api/v1/classifications` or a multipart
-JSONL file at `/api/v1/classifications/file`. Both return `201` with a job ID and
-batch summary only after complete classification and storage. Result exports
-use NDJSON.
+JSONL file at `/api/v1/classifications/file`. Both validate the complete input,
+admit it to the bounded queue, and return `202 Accepted` with `Location`,
+`Retry-After: 1`, a job ID, and a status URL. Result exports use NDJSON and are
+available only after terminal success.
 
 | Method and path | Purpose |
 | --- | --- |
 | `POST /api/v1/sessions` | Create an eight-hour opaque session |
 | `DELETE /api/v1/session` | Revoke the current bearer session |
 | `GET /api/v1/me` | Inspect the current principal |
-| `POST /api/v1/classifications` | Classify a bounded JSON `records` array |
-| `POST /api/v1/classifications/file` | Classify a bounded multipart JSONL upload |
+| `POST /api/v1/classifications` | Validate and queue a bounded JSON `records` array |
+| `POST /api/v1/classifications/file` | Validate and queue a bounded multipart JSONL upload |
 | `GET /api/v1/jobs?limit=50&offset=0` | List recent jobs with `next_offset` |
 | `GET /api/v1/jobs/{id}` | Read one organization-scoped job |
+| `GET /api/v1/jobs/{id}/status` | Poll progress without adding audit events |
+| `POST /api/v1/jobs/{id}/cancel` | Cancel queued work or request a chunk-boundary cancellation |
 | `GET /api/v1/jobs/{id}/export` | Export available results as NDJSON |
 | `/api/v1/admin/*` | Admin-only users, retention, purge, and audit operations |
 
@@ -86,6 +103,14 @@ Expired or purged jobs are not visible and return the same `404` as an unknown
 or cross-organization identifier. A known job without completed results cannot
 be exported and returns `409`; it is never represented as a successful empty
 file. List `limit` is 1–200 and `offset` is 0–100000.
+
+Job states are `queued`, `running`, `cancelling`, `succeeded`, `failed`, and
+`cancelled`. “Processed” means predictor outputs validated and staged so far;
+it never means partial results are published. Cancellation is cooperative:
+Python cannot safely terminate a model call in another thread, so a running
+request remains `cancelling` until the current predictor chunk returns. If
+completion and cancellation race, a state-version compare-and-swap permits
+only one terminal transition.
 
 After Host validation, application and API errors use
 `application/problem+json` with an opaque request ID and stable `code`; details
@@ -107,7 +132,7 @@ OpenAPI document.
   session-bound token.
 - API and UI authorization occurs before classification request bodies are
   parsed or predictors are invoked.
-- Request, input-byte, record-count, and per-model concurrency limits fail
+- Request, input-byte, record-count, queue-capacity, and worker-chunk limits fail
   closed. Application errors after Host validation return sanitized problem
   documents without input content.
 - HTML templates autoescape model and result fields. Local CSS and JavaScript
@@ -126,6 +151,13 @@ The browser workflow requires its bundled JavaScript to add the CSRF header to
 protected forms. A visible `<noscript>` warning explains this dependency; the
 bearer API remains available without browser JavaScript.
 
+Only one web worker may own a workspace database. A private POSIX lock file
+prevents a second process from recovering or executing its jobs. On startup,
+active jobs left by a prior process become `failed` with the stable code
+`interrupted`; they are not retried because their raw bytes were deliberately
+not persisted. Logging out or allowing the accepting session to expire does
+not revoke work that was already authorized and queued.
+
 ## Current language scope
 
 The browser interface is available in English, Italian, French, and Spanish. A
@@ -138,5 +170,7 @@ English machine values.
 UI language does not select or translate classification input. The rules
 baseline is English-oriented. `english-deberta-v1` is the default experimental
 profile; `multilingual-bge-m3-v1` is an opt-in profile for English, Italian,
-French, and Spanish input. The latter is pinned and wired but has not yet been
-run on the committed multilingual fixture, so no model-quality claim is made.
+French, and Spanish input. The latter loaded successfully in a controlled CPU
+capacity probe, but did not complete the 40-record development fixture within
+five minutes. It therefore remains a GPU or asynchronous quality-first
+experiment and makes no model-quality claim.

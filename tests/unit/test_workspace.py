@@ -249,6 +249,143 @@ class WorkspaceTestCase(unittest.TestCase):
                 now=NOW,
             )
 
+    def test_worker_capability_progress_and_completion_are_atomic(self) -> None:
+        analyst_token = self.create_user_and_login("worker-analyst", Role.ANALYST)
+        job_id, capability = self.workspace.enqueue_classification_job(
+            analyst_token,
+            "e" * 64,
+            2,
+            "rules",
+            now=NOW,
+        )
+        self.assertNotIn(capability.encode("ascii"), self.database_path.read_bytes())
+        queued = self.workspace.get_job_status(analyst_token, job_id, now=NOW)
+        self.assertEqual(queued["status"], "queued")
+        self.assertEqual(queued["processed_records"], 0)
+
+        claimed = self.workspace.claim_classification_job(
+            capability,
+            "worker-test",
+            now=NOW,
+        )
+        self.assertEqual(claimed["id"], job_id)
+        self.assertTrue(
+            self.workspace.update_classification_progress(
+                capability,
+                1,
+                now=NOW,
+            )
+        )
+        for invalid in (0, 3):
+            with self.subTest(processed=invalid):
+                with self.assertRaises(ValueError):
+                    self.workspace.update_classification_progress(
+                        capability,
+                        invalid,
+                        now=NOW,
+                    )
+
+        completed_id = self.workspace.complete_classification_job(
+            capability,
+            "e" * 64,
+            [prediction(), prediction()],
+            now=NOW,
+        )
+        self.assertEqual(completed_id, job_id)
+        completed = self.workspace.get_job(analyst_token, job_id, now=NOW)
+        self.assertEqual(completed["status"], "succeeded")
+        self.assertEqual(completed["processed_records"], 2)
+        self.assertEqual(len(completed["results"]), 2)
+        self.assertFalse(self.workspace.fail_classification_job(capability, "internal_error"))
+
+    def test_cancellation_is_creator_scoped_and_wins_before_publication(self) -> None:
+        creator_token = self.create_user_and_login("job-creator", Role.ANALYST)
+        other_token = self.create_user_and_login("other-analyst", Role.ANALYST)
+        job_id, capability = self.workspace.enqueue_classification_job(
+            creator_token,
+            "f" * 64,
+            1,
+            "rules",
+            now=NOW,
+        )
+        self.workspace.claim_classification_job(capability, "worker-test", now=NOW)
+        with self.assertRaises(AuthorizationError):
+            self.workspace.request_job_cancellation(other_token, job_id, now=NOW)
+
+        cancelling = self.workspace.request_job_cancellation(
+            creator_token,
+            job_id,
+            now=NOW,
+        )
+        self.assertEqual(cancelling["status"], "cancelling")
+        self.assertTrue(self.workspace.classification_cancel_requested(capability))
+        with self.assertRaises(ConflictError):
+            self.workspace.complete_classification_job(
+                capability,
+                "f" * 64,
+                [prediction()],
+                now=NOW,
+            )
+        self.assertTrue(
+            self.workspace.fail_classification_job(capability, "cancelled", now=NOW)
+        )
+        cancelled = self.workspace.get_job(creator_token, job_id, now=NOW)
+        self.assertEqual(cancelled["status"], "cancelled")
+        self.assertIsNone(cancelled["results"])
+
+        queued_id, queued_capability = self.workspace.enqueue_classification_job(
+            creator_token,
+            "1" * 64,
+            1,
+            "rules",
+            now=NOW,
+        )
+        queued_cancelled = self.workspace.request_job_cancellation(
+            creator_token,
+            queued_id,
+            now=NOW,
+        )
+        self.assertEqual(queued_cancelled["status"], "cancelled")
+        with self.assertRaises(NotFoundError):
+            self.workspace.claim_classification_job(
+                queued_capability,
+                "worker-test",
+                now=NOW,
+            )
+
+    def test_status_polling_is_read_only_and_recovery_is_fail_closed(self) -> None:
+        job_id, capability = self.workspace.enqueue_classification_job(
+            self.admin_token,
+            "2" * 64,
+            1,
+            "rules",
+            now=NOW,
+        )
+        audit_before = self.workspace.list_audit_events(self.admin_token, now=NOW)
+        for _ in range(5):
+            self.assertEqual(
+                self.workspace.get_job_status(self.admin_token, job_id, now=NOW)[
+                    "status"
+                ],
+                "queued",
+            )
+        self.assertEqual(
+            self.workspace.list_audit_events(self.admin_token, now=NOW),
+            audit_before,
+        )
+
+        future = NOW + timedelta(days=100)
+        future_token = self.admin_token_at(future)
+        self.assertEqual(
+            self.workspace.purge_expired(future_token, now=future).jobs_removed,
+            0,
+        )
+        self.workspace.claim_classification_job(capability, "worker-test", now=future)
+        self.assertEqual(self.workspace.recover_incomplete_jobs(now=future), 1)
+        recovered = self.workspace.get_job_status(future_token, job_id, now=future)
+        self.assertEqual(recovered["status"], "failed")
+        self.assertEqual(recovered["failure_code"], "interrupted")
+
     def test_raw_payload_and_digest_are_bounded(self) -> None:
         for invalid_digest in ("A" * 64, "0" * 63, "../not-a-digest"):
             with self.subTest(digest=invalid_digest):
@@ -463,6 +600,16 @@ class WorkspaceTestCase(unittest.TestCase):
         with self.assertRaisesRegex(OSError, "symlink"):
             Workspace(workspace_alias).login("sample-org", "owner", PASSWORD, now=NOW)
 
+    @unittest.skipUnless(hasattr(os, "link"), "hard links are unavailable")
+    def test_every_database_open_rejects_hard_link_aliases(self) -> None:
+        alias = Path(self.temporary_directory.name) / "workspace-alias.sqlite3"
+        os.link(self.database_path, alias)
+
+        with self.assertRaisesRegex(OSError, "exactly one hard link"):
+            Workspace(alias).initialize(create=False)
+        with self.assertRaisesRegex(OSError, "exactly one hard link"):
+            self.workspace.principal(self.admin_token, now=NOW)
+
     def test_login_typo_does_not_create_a_database(self) -> None:
         typo = Path(self.temporary_directory.name) / "typo.sqlite3"
         with self.assertRaises(FileNotFoundError):
@@ -493,6 +640,69 @@ class WorkspaceTestCase(unittest.TestCase):
             ).fetchall()
         self.assertEqual(after, before)
         self.assertEqual(future_database.read_bytes(), bytes_before)
+
+    def test_initialize_migrates_v1_and_fails_old_pending_jobs(self) -> None:
+        legacy_database = Path(self.temporary_directory.name) / "legacy.sqlite3"
+        with (
+            closing(sqlite3.connect(self.database_path)) as source,
+            closing(sqlite3.connect(legacy_database)) as destination,
+        ):
+            source.backup(destination)
+        with closing(sqlite3.connect(legacy_database)) as connection:
+            with connection:
+                connection.execute("DROP TABLE jobs")
+                connection.executescript(
+                    """
+                    CREATE TABLE jobs (
+                        id TEXT PRIMARY KEY,
+                        organization_id TEXT NOT NULL REFERENCES organizations(id),
+                        created_by TEXT NOT NULL REFERENCES users(id),
+                        status TEXT NOT NULL CHECK (status IN ('pending', 'succeeded', 'failed')),
+                        source_sha256 TEXT NOT NULL,
+                        input_records INTEGER NOT NULL CHECK (input_records > 0),
+                        output_records INTEGER CHECK (output_records >= 0),
+                        raw_payload BLOB,
+                        raw_expires_at TEXT NOT NULL,
+                        results_json TEXT,
+                        results_expires_at TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        completed_at TEXT
+                    );
+                    CREATE INDEX jobs_organization_created
+                        ON jobs (organization_id, created_at DESC);
+                    UPDATE workspace_metadata SET value = '1'
+                        WHERE key = 'schema_version';
+                    """
+                )
+                connection.execute(
+                    """INSERT INTO jobs
+                       (id, organization_id, created_by, status, source_sha256,
+                        input_records, raw_expires_at, results_expires_at, created_at)
+                       VALUES (?, ?, ?, 'pending', ?, 1, ?, ?, ?)""",
+                    (
+                        "legacy-pending",
+                        self.organization_id,
+                        self.admin_id,
+                        "3" * 64,
+                        (NOW + timedelta(days=30)).isoformat(timespec="microseconds"),
+                        (NOW + timedelta(days=90)).isoformat(timespec="microseconds"),
+                        NOW.isoformat(timespec="microseconds"),
+                    ),
+                )
+        legacy_database.chmod(0o600)
+
+        migrated = Workspace(legacy_database)
+        migrated.initialize()
+        migrated.verify()
+        token, _ = migrated.login("sample-org", "owner", PASSWORD, now=NOW)
+        job = migrated.get_job(token, "legacy-pending", now=NOW)
+        self.assertEqual(job["status"], "failed")
+        self.assertEqual(job["failure_code"], "interrupted")
+        with closing(sqlite3.connect(legacy_database)) as connection:
+            version = connection.execute(
+                "SELECT value FROM workspace_metadata WHERE key = 'schema_version'"
+            ).fetchone()[0]
+        self.assertEqual(version, "2")
 
     def test_initialize_rejects_unrelated_non_empty_database(self) -> None:
         unrelated = Path(self.temporary_directory.name) / "unrelated.sqlite3"

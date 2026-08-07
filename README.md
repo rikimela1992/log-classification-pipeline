@@ -52,7 +52,9 @@ flow with separate admin, analyst, and viewer roles. It uses a private SQLite
 database, retains raw source bytes only when explicitly requested from the CLI,
 and applies separate retention periods to raw data, results, and audit events.
 The optional web adapter adds a localhost-only browser interface and HTTP API;
-its web surface never retains raw uploads. See the
+its web surface validates uploads before returning `202 Accepted`, runs them in
+a bounded single-worker queue, exposes progress and cancellation, and never
+stores raw uploads in SQLite. See the
 [local workspace guide](docs/local-workspace.md) and
 [web workspace guide](docs/web-workspace.md). This is not a remotely exposed
 multi-tenant service.
@@ -135,6 +137,8 @@ an alpha local workflow, not an Internet-facing deployment. See the
 [web workspace guide](docs/web-workspace.md) for roles, API behavior, and
 security boundaries. The browser interface can be switched between English,
 Italian, French, and Spanish; API and export field names remain stable.
+`--queue-capacity` bounds admitted work, including the running job, and
+`--worker-batch-size` controls cancellation/progress checkpoints.
 
 For zero-shot inference:
 
@@ -227,6 +231,10 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
   service, an SSO integration, or a production multi-tenant isolation boundary.
 - The web adapter has no brute-force rate limiter, TLS termination, reverse
   proxy support, account recovery, or server database.
+- The web queue is one process-local worker. Bounded raw input bytes exist
+  transiently in RAM and a private temporary file during execution, and may
+  therefore be exposed to swap, core dumps, or the owning OS account. Jobs are
+  not resumed after restart; active states become `failed/interrupted`.
 - Workspace database permissions and SQLite secure deletion do not provide
   encryption at rest or guarantee erasure from backups, snapshots, SSDs, or
   copy-on-write storage.
