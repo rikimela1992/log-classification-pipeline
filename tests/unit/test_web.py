@@ -22,11 +22,18 @@ else:
 
     from log_classification_pipeline.web import WebSettings, create_app
     from log_classification_pipeline.web.app import RequestSizeLimitMiddleware
+    from log_classification_pipeline.web.i18n import (
+        load_catalogs,
+        negotiate_locale,
+        translator,
+    )
 
     WEB_AVAILABLE = True
 
 from log_classification_pipeline.adapters import RulesPredictor
+from log_classification_pipeline.adapters.zero_shot import ZeroShotPredictor
 from log_classification_pipeline.cli import main
+from log_classification_pipeline.model_profiles import MULTILINGUAL_PROFILE_ID
 from log_classification_pipeline.workspace import Role, Workspace
 
 
@@ -164,6 +171,76 @@ class WebApplicationTests(unittest.TestCase):
         hostile = self.client.get("/health", headers={"Host": "hostile.invalid"})
         self.assertEqual(hostile.status_code, 400)
         self.assertIn("x-content-type-options", hostile.headers)
+
+    def test_catalogs_negotiate_language_and_fallback_without_api_drift(self) -> None:
+        catalogs = load_catalogs()
+        self.assertEqual(set(catalogs), {"en", "it", "fr", "es"})
+        self.assertEqual(negotiate_locale(None, "fr-CA,fr;q=0.9,en;q=0.8"), "fr")
+        self.assertEqual(negotiate_locale("it", "es"), "it")
+        self.assertEqual(negotiate_locale(None, "de,*;q=0.5"), "en")
+        self.assertEqual(
+            negotiate_locale(None, "x" * 1025),
+            "en",
+        )
+        self.assertIn("40", translator(catalogs, "es")("jobs.shown", count=40))
+
+        page = self.client.get(
+            "/app/login",
+            headers={"Accept-Language": "it-IT,it;q=0.9"},
+        )
+        self.assertEqual(page.headers["content-language"], "it")
+        self.assertIn("Accept-Language", page.headers["vary"])
+        self.assertIn("Cookie", page.headers["vary"])
+        self.assertIn('<html lang="it">', page.text)
+        self.assertIn("Accedi", page.text)
+
+        api = self.client.post(
+            "/api/v1/sessions",
+            headers={"Accept-Language": "it"},
+            json={"organization": "x", "username": "x", "password": "x"},
+        )
+        self.assertEqual(api.status_code, 422)
+        self.assertEqual(api.headers["content-type"], "application/problem+json")
+        self.assertEqual(api.json()["code"], "invalid_request")
+
+    def test_locale_cookie_change_is_csrf_protected_and_bounded(self) -> None:
+        page = self.client.get("/app/login")
+        csrf = self.client.cookies.get("lcp_login_csrf")
+        self.assertIsNotNone(csrf)
+
+        denied = self.client.post(
+            "/app/locale",
+            data={"locale": "fr", "target": "login"},
+            headers={"Origin": "http://testserver"},
+            follow_redirects=False,
+        )
+        self.assertEqual(denied.status_code, 403)
+
+        changed = self.client.post(
+            "/app/locale",
+            data={"locale": "fr", "target": "outside"},
+            headers={
+                "Origin": "http://testserver",
+                "X-CSRF-Token": csrf,
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(changed.status_code, 303)
+        self.assertEqual(changed.headers["location"], "/app/login")
+        locale_cookie = next(
+            value
+            for value in changed.headers.get_list("set-cookie")
+            if "lcp_locale=" in value
+        )
+        self.assertIn("HttpOnly", locale_cookie)
+        self.assertIn("SameSite=strict", locale_cookie)
+
+        selected = self.client.get(
+            "/app/login",
+            headers={"Accept-Language": "es"},
+        )
+        self.assertEqual(selected.headers["content-language"], "fr")
+        self.assertIn('<html lang="fr">', selected.text)
 
     def test_api_bearer_authentication_and_ambiguous_cookie_are_rejected(self) -> None:
         missing = self.client.get("/api/v1/jobs")
@@ -596,6 +673,47 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(status, 2)
         rejected_run.assert_not_called()
         self.assertIn("model options require --adapter zero-shot", error_output.getvalue())
+
+        with (
+            mock.patch("uvicorn.run") as mismatch_run,
+            redirect_stderr(io.StringIO()) as mismatch_error,
+        ):
+            status = main(
+                [
+                    "web",
+                    str(self.database),
+                    "--adapter",
+                    "zero-shot",
+                    "--model-source",
+                    str(self.database.parent),
+                    "--model-id",
+                    "example/mismatch",
+                    "--model-revision",
+                    "mismatch",
+                ]
+            )
+        self.assertEqual(status, 2)
+        mismatch_run.assert_not_called()
+        self.assertIn("must match --model-profile", mismatch_error.getvalue())
+
+        with mock.patch("uvicorn.run") as profile_run:
+            status = main(
+                [
+                    "web",
+                    str(self.database),
+                    "--enable-model-profile",
+                    MULTILINGUAL_PROFILE_ID,
+                ]
+            )
+        self.assertEqual(status, 0)
+        configured_app = profile_run.call_args.args[0]
+        self.assertEqual(
+            set(configured_app.state.predictors),
+            {"rules", MULTILINGUAL_PROFILE_ID},
+        )
+        configured = configured_app.state.predictors[MULTILINGUAL_PROFILE_ID]
+        self.assertIsInstance(configured, ZeroShotPredictor)
+        self.assertFalse(configured.loaded)
 
 
 if __name__ == "__main__":

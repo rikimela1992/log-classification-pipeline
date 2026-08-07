@@ -16,6 +16,10 @@ from .application import classify_file_into_workspace
 from .batch import process_batch
 from .evaluation import evaluate_records
 from .jsonl import read_jsonl
+from .model_profiles import (
+    ENGLISH_PROFILE_ID,
+    MODEL_PROFILE_IDS,
+)
 from .workspace import RetentionPolicy, Role, Workspace
 
 
@@ -30,6 +34,12 @@ def _add_adapter(parser: argparse.ArgumentParser) -> None:
         choices=("rules", "zero-shot"),
         default="rules",
         help="rules is a wiring baseline; zero-shot requires the ml extra",
+    )
+    parser.add_argument(
+        "--model-profile",
+        choices=MODEL_PROFILE_IDS,
+        default=ENGLISH_PROFILE_ID,
+        help="versioned model/prompt profile used by the zero-shot adapter",
     )
     parser.add_argument(
         "--model-source",
@@ -49,6 +59,16 @@ def _add_adapter(parser: argparse.ArgumentParser) -> None:
         help="explicitly permit a pinned Hub download",
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.60)
+    parser.add_argument(
+        "--subsystem-threshold",
+        type=float,
+        help="override the zero-shot subsystem abstention threshold",
+    )
+    parser.add_argument(
+        "--severity-threshold",
+        type=float,
+        help="override the zero-shot severity abstention threshold",
+    )
 
 
 def _add_workspace_identity(parser: argparse.ArgumentParser) -> None:
@@ -125,12 +145,19 @@ def _add_workspace_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def _build_predictor(args: argparse.Namespace):
     if args.adapter == "rules":
-        if args.model_source or args.model_id or args.model_revision or args.allow_download:
+        if (
+            args.model_profile != ENGLISH_PROFILE_ID
+            or args.model_source
+            or args.model_id
+            or args.model_revision
+            or args.allow_download
+            or args.subsystem_threshold is not None
+            or args.severity_threshold is not None
+        ):
             raise ValueError("model options require --adapter zero-shot")
         return RulesPredictor(
             confidence_threshold=args.confidence_threshold,
         )
-    defaults = ZeroShotConfig()
     if args.model_source:
         source_path = Path(args.model_source)
         if not source_path.is_dir():
@@ -141,6 +168,14 @@ def _build_predictor(args: argparse.Namespace):
             )
         if args.allow_download:
             raise ValueError("--allow-download cannot be used with a local model")
+        profile = ZeroShotConfig.from_profile(args.model_profile)
+        if (
+            args.model_id != profile.model_id
+            or args.model_revision != profile.revision
+        ):
+            raise ValueError(
+                "local model identity and revision must match --model-profile"
+            )
         source = source_path
         model_id = args.model_id
         revision = args.model_revision
@@ -150,9 +185,10 @@ def _build_predictor(args: argparse.Namespace):
             raise ValueError(
                 "--model-id and --model-revision require --model-source"
             )
-        source = defaults.model_source
-        model_id = defaults.model_id
-        revision = defaults.revision
+        profile_config = ZeroShotConfig.from_profile(args.model_profile)
+        source = profile_config.model_source
+        model_id = profile_config.model_id
+        revision = profile_config.revision
         allow_download = args.allow_download
     return ZeroShotPredictor(
         ZeroShotConfig(
@@ -161,6 +197,9 @@ def _build_predictor(args: argparse.Namespace):
             revision=revision,
             allow_download=allow_download,
             confidence_threshold=args.confidence_threshold,
+            profile_id=args.model_profile,
+            subsystem_threshold=args.subsystem_threshold,
+            severity_threshold=args.severity_threshold,
         )
     )
 
@@ -202,6 +241,13 @@ def _parser() -> argparse.ArgumentParser:
     )
     web.add_argument("database", type=Path)
     web.add_argument("--port", type=int, default=8080)
+    web.add_argument(
+        "--enable-model-profile",
+        action="append",
+        choices=MODEL_PROFILE_IDS,
+        default=[],
+        help="add a lazy zero-shot profile to the web model selector; repeatable",
+    )
     _add_limits(web)
     _add_adapter(web)
     _add_workspace_commands(subparsers)
@@ -335,16 +381,41 @@ def _run(args: argparse.Namespace) -> None:
             ) from exc
         if isinstance(args.port, bool) or not 1 <= args.port <= 65535:
             raise ValueError("port must be an integer between 1 and 65535")
-        selected_predictor = _build_predictor(args)
+        if args.adapter == "rules" and args.enable_model_profile:
+            if (
+                args.model_profile != ENGLISH_PROFILE_ID
+                or args.model_source
+                or args.model_id
+                or args.model_revision
+            ):
+                raise ValueError(
+                    "custom model options require --adapter zero-shot"
+                )
+            selected_predictor = RulesPredictor(
+                confidence_threshold=args.confidence_threshold,
+            )
+        else:
+            selected_predictor = _build_predictor(args)
         predictors = {
             "rules": RulesPredictor(
                 confidence_threshold=args.confidence_threshold,
             )
         }
         if args.adapter == "zero-shot":
-            predictors["zero-shot"] = selected_predictor
+            predictors[args.model_profile] = selected_predictor
         else:
             predictors["rules"] = selected_predictor
+        for profile_id in dict.fromkeys(args.enable_model_profile):
+            if profile_id not in predictors:
+                predictors[profile_id] = ZeroShotPredictor(
+                    ZeroShotConfig.from_profile(
+                        profile_id,
+                        allow_download=args.allow_download,
+                        confidence_threshold=args.confidence_threshold,
+                        subsystem_threshold=args.subsystem_threshold,
+                        severity_threshold=args.severity_threshold,
+                    )
+                )
         application = create_app(
             WebSettings(
                 database_path=args.database,

@@ -1,28 +1,36 @@
 <!doctype html>
-<html lang="en">
+<html lang="{{ locale }}">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   {% if csrf %}<meta name="csrf-token" content="{{ csrf }}">{% endif %}
-  <title>{% block title %}Log Classification Pipeline{% endblock %}</title>
+  <title>{% block title %}{{ t("app.title") }}{% endblock %}</title>
   <link rel="stylesheet" href="/static/app.css">
   <script src="/static/app.js" defer></script>
 </head>
-<body>
+<body data-csrf-missing="{{ t('js.csrf_missing') }}" data-operation-failed="{{ t('js.failed') }}" data-service-unreachable="{{ t('js.unreachable') }}" data-error-invalid-credentials="{{ t('error.invalid_credentials') }}" data-error-input-too-large="{{ t('error.input_too_large') }}" data-error-model-busy="{{ t('error.model_busy') }}">
   <header class="topbar">
-    <a class="brand" href="/app">Log Classification Pipeline</a>
-    {% if principal %}
-      <div class="identity">
-        <span>{{ principal.username }} · {{ principal.role.value }}</span>
+    <a class="brand" href="/app">{{ t("app.title") }}</a>
+    <div class="identity">
+      <form action="/app/locale" method="post" class="locale-form" data-secure-form>
+        <input type="hidden" name="target" value="{{ locale_target }}">
+        <label><span class="visually-hidden">{{ t("nav.language") }}</span>
+          <select name="locale" aria-label="{{ t('nav.language') }}" onchange="this.form.requestSubmit()">
+            {% for code in locales %}<option value="{{ code }}" {% if code == locale %}selected{% endif %}>{{ code|upper }}</option>{% endfor %}
+          </select>
+        </label>
+      </form>
+      {% if principal %}
+        <span>{{ principal.username }} · {{ t("role." + principal.role.value) }}</span>
         <form action="/app/logout" method="post" data-secure-form>
-          <button class="button secondary" type="submit">Sign out</button>
+          <button class="button secondary" type="submit">{{ t("nav.sign_out") }}</button>
         </form>
-      </div>
-    {% endif %}
+      {% endif %}
+    </div>
   </header>
-  <div class="alpha-banner">Alpha local workspace — not production-ready</div>
+  <div class="alpha-banner">{{ t("alpha.banner") }}</div>
   <main class="container">
-    <noscript><div class="alert" role="alert">This local interface requires JavaScript for protected form submissions. The HTTP API remains available to authenticated clients.</div></noscript>
+    <noscript><div class="alert" role="alert">{{ t("noscript.message") }}</div></noscript>
     {% block content %}{% endblock %}
   </main>
 </body>

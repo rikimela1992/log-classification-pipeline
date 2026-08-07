@@ -8,15 +8,17 @@ from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol
 
-from ..prediction import validate_classification_prediction
-from ..taxonomy import (
-    SEVERITY_CANDIDATES,
-    SUBSYSTEM_CANDIDATES,
-    TAXONOMY_VERSION,
+from ..model_profiles import (
+    ENGLISH_PROFILE_ID,
+    get_model_profile,
+    profile_configuration_digest,
 )
+from ..prediction import validate_classification_prediction
+from ..taxonomy import TAXONOMY_VERSION
 
-DEFAULT_MODEL_ID = "MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c"
-DEFAULT_MODEL_REVISION = "bddf8c5411c34ac3565e16e04384fd68b2618dda"
+_DEFAULT_PROFILE = get_model_profile(ENGLISH_PROFILE_ID)
+DEFAULT_MODEL_ID = _DEFAULT_PROFILE.model_id
+DEFAULT_MODEL_REVISION = _DEFAULT_PROFILE.model_revision
 
 
 class ZeroShotPipeline(Protocol):
@@ -31,14 +33,19 @@ class ZeroShotConfig:
     allow_download: bool = False
     device: int | str = -1
     confidence_threshold: float = 0.60
+    subsystem_threshold: float | None = None
+    severity_threshold: float | None = None
     inference_batch_size: int = 8
+    profile_id: str = ENGLISH_PROFILE_ID
 
     def __post_init__(self) -> None:
-        if not str(self.model_source).strip():
+        if not isinstance(self.model_source, (str, Path)) or not str(
+            self.model_source
+        ).strip():
             raise ValueError("model_source must not be blank")
-        if not self.revision.strip():
+        if not isinstance(self.revision, str) or not self.revision.strip():
             raise ValueError("revision must not be blank")
-        if not self.model_id.strip():
+        if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise ValueError("model_id must not be blank")
         if isinstance(self.confidence_threshold, bool) or not isinstance(
             self.confidence_threshold, (int, float)
@@ -46,12 +53,59 @@ class ZeroShotConfig:
             raise ValueError("confidence_threshold must be numeric")
         if not 0 <= self.confidence_threshold <= 1:
             raise ValueError("confidence_threshold must be in [0, 1]")
+        for name, value in (
+            ("subsystem_threshold", self.subsystem_threshold),
+            ("severity_threshold", self.severity_threshold),
+        ):
+            if value is not None and (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not 0 <= value <= 1
+            ):
+                raise ValueError(f"{name} must be numeric in [0, 1]")
         if (
             isinstance(self.inference_batch_size, bool)
             or not isinstance(self.inference_batch_size, int)
             or self.inference_batch_size <= 0
         ):
             raise ValueError("inference_batch_size must be a positive integer")
+        profile = get_model_profile(self.profile_id)
+        if self.model_id != profile.model_id or self.revision != profile.model_revision:
+            raise ValueError(
+                "model_id and revision must match the selected model profile"
+            )
+
+    @property
+    def resolved_subsystem_threshold(self) -> float:
+        value = self.subsystem_threshold
+        return float(self.confidence_threshold if value is None else value)
+
+    @property
+    def resolved_severity_threshold(self) -> float:
+        value = self.severity_threshold
+        return float(self.confidence_threshold if value is None else value)
+
+    @classmethod
+    def from_profile(cls, profile_id: str, **kwargs) -> ZeroShotConfig:
+        profile = get_model_profile(profile_id)
+        return cls(
+            model_source=profile.model_id,
+            model_id=profile.model_id,
+            revision=profile.model_revision,
+            profile_id=profile.profile_id,
+            **kwargs,
+        )
+
+    @property
+    def configuration_digest(self) -> str:
+        return profile_configuration_digest(
+            get_model_profile(self.profile_id),
+            model_id=self.model_id,
+            model_revision=self.revision,
+            subsystem_threshold=self.resolved_subsystem_threshold,
+            severity_threshold=self.resolved_severity_threshold,
+            inference_batch_size=self.inference_batch_size,
+        )
 
 
 def load_zero_shot_pipeline(config: ZeroShotConfig) -> ZeroShotPipeline:
@@ -161,7 +215,7 @@ class ZeroShotPredictor:
             hypothesis_template=hypothesis_template,
             multi_label=False,
             batch_size=self.config.inference_batch_size,
-            truncation=True,
+            truncation=get_model_profile(self.config.profile_id).truncation,
         )
         results = _as_result_list(raw, len(texts), task)
         return [_top_prediction(result, candidates, task) for result in results]
@@ -172,17 +226,18 @@ class ZeroShotPredictor:
     ) -> list[dict[str, Any]]:
         if not records:
             return []
+        profile = get_model_profile(self.config.profile_id)
         texts = [str(record["message"]) for record in records]
         subsystems = self._classify(
             texts,
-            SUBSYSTEM_CANDIDATES,
-            "This technical log event concerns {}.",
+            dict(profile.subsystem_candidates),
+            profile.subsystem_hypothesis,
             "subsystem",
         )
         severities = self._classify(
             texts,
-            SEVERITY_CANDIDATES,
-            "The severity of this technical log event is {}.",
+            dict(profile.severity_candidates),
+            profile.severity_hypothesis,
             "severity",
         )
 
@@ -203,11 +258,16 @@ class ZeroShotPredictor:
                     "label": severity_label,
                     "score": severity_score,
                 },
-                "abstained": min(subsystem_score, severity_score)
-                < self.config.confidence_threshold,
+                "abstained": (
+                    subsystem_score < self.config.resolved_subsystem_threshold
+                    or severity_score < self.config.resolved_severity_threshold
+                ),
                 "model": {
                     "id": self.config.model_id,
                     "revision": self.config.revision,
+                    "profile_id": profile.profile_id,
+                    "profile_revision": profile.profile_revision,
+                    "config_sha256": self.config.configuration_digest,
                 },
             }
             predictions.append(

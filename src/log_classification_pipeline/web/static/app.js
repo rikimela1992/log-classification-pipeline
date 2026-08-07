@@ -13,7 +13,7 @@ document.addEventListener("submit", async (event) => {
   }
   const csrf = document.querySelector('meta[name="csrf-token"]')?.getAttribute("content");
   if (!csrf) {
-    window.alert("The session protection token is missing. Reload the page.");
+    window.alert(document.body.dataset.csrfMissing);
     return;
   }
   form.dataset.submitting = "true";
@@ -31,17 +31,23 @@ document.addEventListener("submit", async (event) => {
       return;
     }
     if (!response.ok) {
-      let message = "The operation failed closed.";
+      let message = document.body.dataset.operationFailed;
       try {
         const problem = await response.json();
-        message = problem.detail || message;
+        const localized = {
+          invalid_credentials: document.body.dataset.errorInvalidCredentials,
+          input_too_large: document.body.dataset.errorInputTooLarge,
+          request_too_large: document.body.dataset.errorInputTooLarge,
+          model_busy: document.body.dataset.errorModelBusy,
+        };
+        message = localized[problem.code] || message;
       } catch (_error) {
         // Keep the generic message.
       }
       window.alert(message);
     }
   } catch (_error) {
-    window.alert("The local service could not be reached. No success was assumed.");
+    window.alert(document.body.dataset.serviceUnreachable);
   } finally {
     delete form.dataset.submitting;
     controls.forEach((control) => { control.disabled = false; });

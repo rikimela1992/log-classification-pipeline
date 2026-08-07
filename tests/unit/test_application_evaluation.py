@@ -15,6 +15,7 @@ from log_classification_pipeline.application import (
 from log_classification_pipeline.contracts import PredictionContractError
 from log_classification_pipeline.contracts import BatchResourceLimitError
 from log_classification_pipeline.evaluation import evaluate_records
+from log_classification_pipeline.jsonl import read_jsonl
 from log_classification_pipeline.taxonomy import SEVERITY_LABELS, SUBSYSTEM_LABELS, TAXONOMY_VERSION
 from log_classification_pipeline.workspace import AuthorizationError, Role, Workspace
 
@@ -246,6 +247,40 @@ class ApplicationTests(unittest.TestCase):
 
 
 class EvaluationTests(unittest.TestCase):
+    def test_multilingual_smoke_fixture_is_balanced_and_grouped(self) -> None:
+        fixture = (
+            Path(__file__).parents[1]
+            / "fixtures"
+            / "synthetic-evaluation-multilingual.jsonl"
+        )
+        records = read_jsonl(fixture).records
+
+        self.assertEqual(len(records), 40)
+        self.assertEqual(
+            {language: sum(record["language"] == language for record in records)
+             for language in ("en", "it", "fr", "es")},
+            {"en": 10, "it": 10, "fr": 10, "es": 10},
+        )
+        for language in ("en", "it", "fr", "es"):
+            self.assertEqual(
+                {
+                    record["expected_subsystem"]
+                    for record in records
+                    if record["language"] == language
+                },
+                set(SUBSYSTEM_LABELS),
+            )
+
+        result = evaluate_records(records, RulesPredictor())
+        self.assertEqual(set(result["language_metrics"]), {"en", "it", "fr", "es"})
+        self.assertEqual(result["records"], 40)
+        self.assertEqual(result["fixture_version"], "multilingual-smoke-v1")
+        self.assertEqual(result["split"], "development")
+        self.assertEqual(
+            result["model"],
+            {"id": "synthetic-rules-baseline", "revision": "1"},
+        )
+
     def test_perfect_full_taxonomy_evaluation_reports_reproducible_metrics(self) -> None:
         records = []
         expected_predictions = []
@@ -283,14 +318,14 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(result["records_per_second"], 5.0)
         self.assertEqual(result["model_counts"], {"fixture": len(records)})
 
-    def test_errors_abstention_and_multiple_models_are_aggregated(self) -> None:
+    def test_errors_and_abstention_are_aggregated(self) -> None:
         records = [
             {"message": "one", "expected_subsystem": "auth", "expected_severity": "error"},
             {"message": "two", "expected_subsystem": "network", "expected_severity": "warning"},
         ]
         predictions = [
             prediction("auth", "warning", model_id="a"),
-            prediction("compute", "warning", abstained=True, model_id="b"),
+            prediction("compute", "warning", abstained=True, model_id="a"),
         ]
         with mock.patch(
             "log_classification_pipeline.evaluation.time.perf_counter",
@@ -299,11 +334,104 @@ class EvaluationTests(unittest.TestCase):
             result = evaluate_records(records, lambda inputs: predictions)
 
         self.assertEqual(result["subsystem_accuracy"], 0.5)
-        self.assertEqual(result["severity_accuracy"], 0.5)
+        self.assertEqual(result["severity_accuracy"], 0.0)
         self.assertEqual(result["abstained"], 1)
         self.assertEqual(result["coverage"], 0.5)
+        self.assertEqual(result["selective_subsystem_accuracy"], 1.0)
+        self.assertEqual(result["selective_severity_accuracy"], 0.0)
         self.assertIsNone(result["records_per_second"])
-        self.assertEqual(result["model_counts"], {"a": 1, "b": 1})
+        self.assertEqual(result["model_counts"], {"a": 2})
+        self.assertEqual(result["model"], {"id": "a", "revision": "1"})
+
+    def test_mixed_prediction_provenance_is_rejected(self) -> None:
+        records = [
+            {
+                "message": "one",
+                "expected_subsystem": "auth",
+                "expected_severity": "error",
+            },
+            {
+                "message": "two",
+                "expected_subsystem": "network",
+                "expected_severity": "warning",
+            },
+        ]
+        mixed = [
+            prediction("auth", "error", model_id="same"),
+            prediction("network", "warning", model_id="same"),
+        ]
+        mixed[1]["model"]["revision"] = "2"
+
+        with self.assertRaisesRegex(ValueError, "mix model provenance"):
+            evaluate_records(records, lambda inputs: mixed)
+
+    def test_language_metrics_expose_worst_group_and_accuracy_gap(self) -> None:
+        records = [
+            {
+                "message": "service failed",
+                "expected_subsystem": "compute",
+                "expected_severity": "error",
+                "language": "en",
+            },
+            {
+                "message": "servizio non riuscito",
+                "expected_subsystem": "compute",
+                "expected_severity": "error",
+                "language": "it",
+            },
+        ]
+        predictions = [
+            prediction("compute", "error"),
+            prediction("network", "warning"),
+        ]
+
+        result = evaluate_records(records, lambda inputs: predictions)
+
+        self.assertEqual(result["language_metrics"]["en"]["joint_accuracy"], 1.0)
+        self.assertEqual(result["language_metrics"]["it"]["joint_accuracy"], 0.0)
+        self.assertEqual(result["worst_language"]["joint_accuracy"], "it")
+        self.assertEqual(result["max_language_gap"]["joint_accuracy"], 1.0)
+
+    def test_invalid_fixture_language_is_rejected(self) -> None:
+        record = {
+            "message": "one",
+            "expected_subsystem": "auth",
+            "expected_severity": "error",
+            "language": "de",
+        }
+        with self.assertRaisesRegex(ValueError, "invalid language"):
+            evaluate_records([record], lambda inputs: [])
+
+    def test_fixture_group_metadata_must_be_consistent(self) -> None:
+        base = {
+            "expected_subsystem": "auth",
+            "expected_severity": "error",
+            "fixture_version": "v1",
+            "split": "development",
+        }
+        cases = (
+            [
+                {**base, "message": "one", "language": "en"},
+                {**base, "message": "two"},
+            ],
+            [
+                {**base, "message": "one", "fixture_version": "v1"},
+                {**base, "message": "two", "fixture_version": "v2"},
+            ],
+            [
+                {**base, "message": "one", "scenario_id": "same"},
+                {**base, "message": "two", "scenario_id": "same"},
+            ],
+            [{**base, "message": "one", "split": "training"}],
+            [
+                {**base, "message": "one", "split": "development"},
+                {**base, "message": "two", "split": "test"},
+            ],
+        )
+        for records in cases:
+            with self.subTest(records=records):
+                with self.assertRaises(ValueError):
+                    evaluate_records(records, lambda inputs: [])
 
     def test_empty_input_and_predictor_cardinality_mismatch_are_rejected(self) -> None:
         with self.assertRaisesRegex(ValueError, "at least one"):

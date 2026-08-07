@@ -19,10 +19,11 @@ publication path.
 | atomic.py | Encode JSONL, apply permissions, sync a temporary file, publish, sync the directory | Attempt pre-publication temporary cleanup; distinguish committed failures |
 | adapters/rules.py | Provide a deterministic wiring baseline for synthetic demos | Abstain when subsystem evidence is absent |
 | adapters/zero_shot.py | Lazy-load a pinned NLI encoder, offline by default | Fail before publication on missing artifacts or invalid model output |
+| model_profiles.py | Resolve versioned model, prompt, language, and taxonomy configurations | Reject unknown profiles before artifact loading |
 | application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
 | workspace.py | Persist complete classifications with local users, roles, sessions, retention, and audit | Deny before prediction; commit a complete job and its audit event together |
-| web/app.py | Provide an optional authenticated loopback API and server-rendered UI | Authenticate, authorize, check CSRF, and enforce request limits before parsing uploads or invoking a predictor |
+| web/app.py / web/i18n.py | Provide an authenticated loopback API and localized server-rendered UI | Authenticate, authorize, check CSRF, validate catalogs, and enforce request limits before parsing uploads or invoking a predictor |
 
 ## Processing sequence
 
@@ -86,9 +87,12 @@ Model weights, tokenizers, caches, and datasets are external artifacts and must
 not be committed. The default Hub adapter revision is immutable, remote
 downloads are opt-in, remote code is disabled, and `safetensors` is required.
 Local-directory model identity and revision are explicitly declared by the
-caller but are not yet verified against an artifact manifest. The adapter
-returns only versioned classifications and declared model provenance; it does
-not include the input message.
+caller but are not yet verified against an artifact manifest. Known profiles
+bind model and revision, supported-language intent, candidate descriptions,
+hypothesis templates, and truncation behavior. Each result includes a
+deterministic configuration digest covering the resolved per-head abstention
+thresholds and inference batch size. The adapter does not include the input
+message.
 
 ## Deliberate exclusions
 

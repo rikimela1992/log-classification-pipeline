@@ -44,10 +44,12 @@ from ..workspace import (
     Workspace,
     WorkspaceError,
 )
+from .i18n import SUPPORTED_LOCALES, load_catalogs, negotiate_locale, translator
 
 
 _SESSION_COOKIE = "lcp_session"
 _LOGIN_CSRF_COOKIE = "lcp_login_csrf"
+_LOCALE_COOKIE = "lcp_locale"
 _CSRF_HEADER = b"x-csrf-token"
 _SESSION_SECONDS = 8 * 60 * 60
 
@@ -284,7 +286,10 @@ class AuthenticationPreflightMiddleware:
                     scope, receive, send
                 )
                 return
-            if path == "/app/login":
+            if path == "/app/login" or (
+                path == "/app/locale"
+                and _cookie_value(scope, _SESSION_COOKIE) is None
+            ):
                 cookie_csrf = _cookie_value(scope, _LOGIN_CSRF_COOKIE)
                 submitted = headers.get(_CSRF_HEADER, b"").decode(
                     "ascii",
@@ -477,12 +482,44 @@ def create_app(
 
     package_root = Path(__file__).parent
     templates = Jinja2Templates(directory=package_root / "templates")
+    catalogs = load_catalogs()
     app.mount(
         "/static",
         StaticFiles(directory=package_root / "static"),
         name="static",
     )
     bearer = HTTPBearer(auto_error=False)
+
+    def request_locale(request: Request) -> str:
+        return negotiate_locale(
+            request.cookies.get(_LOCALE_COOKIE),
+            request.headers.get("Accept-Language"),
+        )
+
+    def render_template(
+        request: Request,
+        name: str,
+        context: dict[str, Any],
+        *,
+        status_code: int = 200,
+    ):
+        locale = request_locale(request)
+        translate = translator(catalogs, locale)
+        response = templates.TemplateResponse(
+            request=request,
+            name=name,
+            context={
+                **context,
+                "locale": locale,
+                "locales": SUPPORTED_LOCALES,
+                "locale_target": "app" if context.get("principal") else "login",
+                "t": translate,
+            },
+            status_code=status_code,
+        )
+        response.headers["Content-Language"] = locale
+        response.headers["Vary"] = "Accept-Language, Cookie"
+        return response
 
     def api_token(
         request: Request,
@@ -782,15 +819,17 @@ def create_app(
 
     def login_page(
         request: Request,
-        error: str | None = None,
+        error_key: str | None = None,
         *,
         status_code: int = 200,
     ):
         csrf = secrets.token_urlsafe(32)
-        response = templates.TemplateResponse(
-            request=request,
-            name="login.html",
-            context={"csrf": csrf, "error": error},
+        locale = request_locale(request)
+        translate = translator(catalogs, locale)
+        response = render_template(
+            request,
+            "login.html",
+            {"csrf": csrf, "error": translate(error_key) if error_key else None},
             status_code=status_code,
         )
         response.set_cookie(
@@ -867,11 +906,7 @@ def create_app(
             cookie_csrf is None
             or not secrets.compare_digest(cookie_csrf, csrf)
         ):
-            return login_page(
-                request,
-                "Login request expired. Try again.",
-                status_code=403,
-            )
+            return login_page(request, "login.expired", status_code=403)
         try:
             token, _principal = workspace.login(organization, username, password)
         except (AuthenticationError, ValueError):
@@ -881,7 +916,7 @@ def create_app(
                     "invalid_credentials",
                     "Invalid credentials.",
                 )
-            return login_page(request, "Invalid credentials.", status_code=401)
+            return login_page(request, "login.invalid", status_code=401)
         response = RedirectResponse("/app", status_code=303)
         response.set_cookie(
             _SESSION_COOKIE,
@@ -901,11 +936,32 @@ def create_app(
             token = cookie_token(request)
         except AuthenticationError:
             return RedirectResponse("/app/login", status_code=303)
-        return templates.TemplateResponse(
-            request=request,
-            name="dashboard.html",
-            context=dashboard_context(token, job_offset=offset),
+        return render_template(
+            request,
+            "dashboard.html",
+            dashboard_context(token, job_offset=offset),
         )
+
+    @app.post("/app/locale", include_in_schema=False)
+    def select_locale(
+        request: Request,
+        locale: Annotated[str, Form()],
+        target: Annotated[str, Form()] = "login",
+    ):
+        if locale not in SUPPORTED_LOCALES:
+            raise ValueError("unsupported locale")
+        destination = "/app" if target == "app" else "/app/login"
+        response = RedirectResponse(destination, status_code=303)
+        response.set_cookie(
+            _LOCALE_COOKIE,
+            locale,
+            httponly=True,
+            max_age=365 * 24 * 60 * 60,
+            path="/app",
+            samesite="strict",
+            secure=settings.cookie_secure,
+        )
+        return response
 
     @app.post("/app/logout", include_in_schema=False)
     def logout(request: Request):
@@ -942,10 +998,10 @@ def create_app(
         stored_job = workspace.get_job(token, job_id)
         if stored_job.get("results") is None:
             raise ConflictError("results are unavailable")
-        return templates.TemplateResponse(
-            request=request,
-            name="job.html",
-            context={
+        return render_template(
+            request,
+            "job.html",
+            {
                 "csrf": workspace.csrf_token(token),
                 "job": stored_job,
                 "principal": workspace.principal(token),

@@ -29,7 +29,8 @@ isolate the predictor, remove sensitive fields, or detect malicious content.
 The optional local workspace adds password authentication, service-layer role
 checks, session expiry, retention, and audit boundaries for its own operations.
 The web adapter adds loopback HTTP, strict host validation, bounded requests,
-same-origin and session-bound CSRF checks, secure response headers, and
+same-origin checks, pre-session double-submit CSRF for login, session-bound
+CSRF for authenticated operations, secure response headers, and
 `HttpOnly`/`SameSite=Strict` cookies. Authorization is checked before upload
 parsing or predictor invocation. The web surface does not retain raw uploads.
 

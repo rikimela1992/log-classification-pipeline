@@ -87,6 +87,40 @@ class PredictionContractTests(unittest.TestCase):
                 with self.assertRaises(PredictionContractError):
                     validate_classification_prediction(record, 2)
 
+    def test_profile_provenance_is_complete_and_digest_is_strict(self) -> None:
+        record = valid_prediction()
+        provenance = {
+            "profile_id": "multilingual-bge-m3-v1",
+            "profile_revision": "1",
+            "config_sha256": "sha256:" + ("a" * 64),
+        }
+        record["model"].update(provenance)
+        normalized = validate_classification_prediction(record, 1)
+        self.assertEqual(
+            normalized["model"]["profile_id"],
+            "multilingual-bge-m3-v1",
+        )
+
+        for field in provenance:
+            with self.subTest(missing=field):
+                invalid = valid_prediction()
+                invalid["model"].update(provenance)
+                del invalid["model"][field]
+                with self.assertRaises(PredictionContractError):
+                    validate_classification_prediction(invalid, 1)
+
+        invalid = valid_prediction()
+        invalid["model"].update(provenance)
+        invalid["model"]["config_sha256"] = "sha256:not-a-digest"
+        with self.assertRaises(PredictionContractError):
+            validate_classification_prediction(invalid, 1)
+
+        signed = valid_prediction()
+        signed["model"].update(provenance)
+        signed["model"]["config_sha256"] = "sha256:+" + ("a" * 63)
+        with self.assertRaises(PredictionContractError):
+            validate_classification_prediction(signed, 1)
+
     def test_callers_can_supply_a_versioned_label_subset(self) -> None:
         record = valid_prediction()
         record["subsystem"] = {"label": "custom-subsystem", "score": 0.5}

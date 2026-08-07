@@ -11,12 +11,12 @@ workflow, **not** a production security assessment or penetration test.
 
 | Check | Result |
 | --- | --- |
-| Complete suite with `web` and `test` extras | 108 tests passed |
-| Core-only environment | 92 tests passed; 16 web tests intentionally skipped |
+| Complete suite with `web` and `test` extras | 118 tests passed |
+| Core-only environment | 100 tests passed; 18 web tests intentionally skipped |
 | Python/TOML parsing | passed |
 | `git diff --check` | passed |
 | Local wheel build | passed |
-| Web templates and static assets in wheel | 6 of 6 present |
+| Web templates, static assets, and locale catalogs in wheel | 10 of 10 present |
 | Private-IP and common credential-pattern scan | no matches |
 
 The web integration cases cover:
@@ -24,11 +24,15 @@ The web integration cases cover:
 - strict Host validation, no CORS opt-in, security headers, and HTTPS-only HSTS;
 - bearer-only API authentication, ambiguous cookie/bearer rejection, logout,
   and server-side session revocation;
-- session-bound CSRF plus exact Origin checks for state-changing UI requests;
+- pre-session and session-bound CSRF plus exact Origin checks for
+  state-changing UI requests;
 - viewer denial before upload parsing and predictor invocation;
 - byte, record, whole-request, multipart, and streamed-body limits;
 - ignored hostile filenames and privacy-minimal result export;
 - HTML autoescaping for untrusted model metadata;
+- validated English, Italian, French, and Spanish catalogs, bounded language
+  negotiation, protected locale cookies, and unchanged API machine codes;
+- lazy model-profile registration without artifact loading at web startup;
 - admin-only users, retention, purge, and audit surfaces;
 - loopback-only CLI binding with proxy headers and access logging disabled;
 - OpenAPI containing API routes but not browser UI routes.
@@ -65,5 +69,6 @@ release.
 - Request duration and slow-client limits depend on the ASGI server or a future
   explicitly configured ingress boundary.
 - Multilingual model quality, load behavior, concurrent purge/view races, and
-  client disconnect cleanup need additional measured campaigns.
+  client disconnect cleanup need additional measured campaigns. UI
+  localization is verified but does not imply classifier accuracy.
 - No independent security review has been completed.

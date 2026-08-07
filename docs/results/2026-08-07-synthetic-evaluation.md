@@ -7,21 +7,24 @@ It is **not** evidence of production accuracy. The fixture contains 11 short,
 handwritten English messages designed for this repository. It contains no real
 logs, operational identifiers, organizations, addresses, or dataset history.
 
-## Results
+## Historical results and correction
 
-| Predictor | Subsystem accuracy | Subsystem macro-F1 | Severity accuracy | Severity macro-F1 | Coverage at 0.60 |
-|---|---:|---:|---:|---:|---:|
-| Synthetic rules baseline | 1.000 | 1.000 | 1.000 | 1.000 | 1.000 |
-| DeBERTa zero-shot | 1.000 | 1.000 | 0.727 | 0.448 | 0.182 |
+| Predictor | Historical top-label subsystem accuracy | Historical top-label severity accuracy | Coverage at 0.60 |
+|---|---:|---:|---:|
+| Synthetic rules baseline | 1.000 | 1.000 | 1.000 |
+| DeBERTa zero-shot | 1.000 | 0.727 | 0.182 |
 
 The rules result only confirms that the deliberately aligned fixture reaches
 every taxonomy class and exercises the evaluation wiring. It must not be
 interpreted as model quality.
 
-The zero-shot result is more informative: subsystem routing was promising on
-this tiny fixture, while severity wording and calibration were not. Nine of
-eleven records abstained at the conservative 0.60 threshold. Accuracy and
-macro-F1 above are calculated over all records, including abstentions.
+The original evaluator incorrectly allowed an abstained record's top label to
+increase accuracy and macro-F1. The table preserves only that historical
+top-label observation and coverage; it is not a current end-to-end score. The
+evaluator now treats every abstention as incorrect for end-to-end accuracy/F1
+and reports selective accuracy separately. Because the original per-record
+outputs were intentionally not retained, corrected DeBERTa metrics cannot be
+reconstructed. A new model run is required.
 
 ## Local CPU measurement
 

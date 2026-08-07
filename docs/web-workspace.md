@@ -27,22 +27,21 @@ Open `http://127.0.0.1:8080/app`. The command binds only to `127.0.0.1`, disable
 proxy-header trust and access logging, and refuses an unknown or unsafe
 workspace database. Stop it with `Ctrl-C`.
 
-The rules baseline is available without model dependencies. To add the
-experimental zero-shot choice, install both extras and identify a local model
-directory explicitly:
+The rules baseline is available without model dependencies. To expose the two
+known profiles in the selector, install both extras and enable them. Predictors
+remain lazy and downloads remain disabled by default:
 
 ```console
 .venv/bin/python -m pip install '.[web,ml]'
 .venv/bin/log-classify web ./state/workspace.sqlite3 \
-  --adapter zero-shot \
-  --model-source /path/to/local/model \
-  --model-id <declared-model-id> \
-  --model-revision <declared-revision>
+  --enable-model-profile english-deberta-v1 \
+  --enable-model-profile multilingual-bge-m3-v1
 ```
 
-Local model identity and revision are caller-declared until artifact-manifest
-verification is implemented. Model weights, caches, tokenizers, logs, and
-datasets must remain outside this repository.
+Local model identity and revision must match the selected registered profile,
+but directory contents are not verified until artifact-manifest verification
+is implemented. Model weights, caches, tokenizers, logs, and datasets must
+remain outside this repository.
 
 ## Roles and data exposure
 
@@ -102,8 +101,10 @@ OpenAPI document.
 
 - Host headers are allow-listed; the CLI configures only localhost names.
 - UI sessions use `HttpOnly`, `SameSite=Strict` cookies with no `Domain`.
-- Every state-changing UI request requires an exact same-origin check and a
-  session-bound CSRF token before form or upload parsing.
+- Every state-changing UI request requires an exact same-origin check before
+  form or upload parsing. Login and unauthenticated locale selection use a
+  pre-session double-submit CSRF token; authenticated operations use a
+  session-bound token.
 - API and UI authorization occurs before classification request bodies are
   parsed or predictors are invoked.
 - Request, input-byte, record-count, and per-model concurrency limits fail
@@ -127,8 +128,15 @@ bearer API remains available without browser JavaScript.
 
 ## Current language scope
 
-The web interface is currently English. The rules baseline and recommended
-DeBERTa NLI adapter are also English-oriented. Italian, French, Spanish, and
-English UI localization plus an explicitly multilingual model profile are
-planned as a separate measured feature; no multilingual accuracy claim is made
-yet.
+The browser interface is available in English, Italian, French, and Spanish. A
+protected language selector stores an `HttpOnly`, `SameSite=Strict` cookie;
+otherwise the UI negotiates `Accept-Language` and falls back to English.
+Translation catalogs are packaged and cross-validated at startup. API fields,
+problem codes, taxonomy labels, model IDs, and JSONL exports remain stable
+English machine values.
+
+UI language does not select or translate classification input. The rules
+baseline is English-oriented. `english-deberta-v1` is the default experimental
+profile; `multilingual-bge-m3-v1` is an opt-in profile for English, Italian,
+French, and Spanish input. The latter is pinned and wired but has not yet been
+run on the committed multilingual fixture, so no model-quality claim is made.

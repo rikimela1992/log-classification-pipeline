@@ -80,6 +80,38 @@ def validate_classification_prediction(
             f"prediction {output_index} model revision must be a non-blank string"
         )
 
+    optional_model_fields = {}
+    present_provenance = {
+        name: model.get(name)
+        for name in ("profile_id", "profile_revision", "config_sha256")
+        if name in model
+    }
+    if present_provenance:
+        if set(present_provenance) != {
+            "profile_id",
+            "profile_revision",
+            "config_sha256",
+        }:
+            raise PredictionContractError(
+                f"prediction {output_index} model profile provenance is incomplete"
+            )
+        for name, value in present_provenance.items():
+            if not isinstance(value, str) or not value.strip():
+                raise PredictionContractError(
+                    f"prediction {output_index} model {name} must be a non-blank string"
+                )
+            optional_model_fields[name] = value.strip()
+        digest = optional_model_fields["config_sha256"]
+        hexadecimal = digest.removeprefix("sha256:")
+        if (
+            len(digest) != 71
+            or not digest.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in hexadecimal)
+        ):
+            raise PredictionContractError(
+                f"prediction {output_index} model config_sha256 is invalid"
+            )
+
     return {
         "schema_version": TAXONOMY_VERSION,
         "subsystem": _validate_head(
@@ -98,5 +130,6 @@ def validate_classification_prediction(
         "model": {
             "id": model_id.strip(),
             "revision": revision.strip(),
+            **optional_model_fields,
         },
     }

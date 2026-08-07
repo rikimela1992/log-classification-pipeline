@@ -133,17 +133,31 @@ For the authenticated localhost web interface and API:
 Then open `http://127.0.0.1:8080/app`. The server binds only to loopback and is
 an alpha local workflow, not an Internet-facing deployment. See the
 [web workspace guide](docs/web-workspace.md) for roles, API behavior, and
-security boundaries.
+security boundaries. The browser interface can be switched between English,
+Italian, French, and Spanish; API and export field names remain stable.
 
 For zero-shot inference:
 
     .venv/bin/python -m pip install '.[ml]'
     .venv/bin/log-classify classify input.jsonl output.jsonl --adapter zero-shot \
-      --model-source /path/to/local/model --model-id <declared-model-id> \
-      --model-revision <declared-revision>
+      --model-source /path/to/local/model \
+      --model-id MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c \
+      --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda
 
 Downloads are disabled by default. Pass `--allow-download` only when network
 access and the pinned model provenance are acceptable.
+
+For multilingual English, Italian, French, and Spanish input, select the larger
+experimental profile explicitly:
+
+    .venv/bin/log-classify evaluate \
+      tests/fixtures/synthetic-evaluation-multilingual.jsonl \
+      --adapter zero-shot --model-profile multilingual-bge-m3-v1 \
+      --allow-download
+
+This can download an approximately 1.14 GB model. Profile resolution and the
+adapter contract are tested, but the artifact has not been loaded for this
+snapshot and its classification quality has not yet been measured here.
 
 ## Synthetic example
 
@@ -157,18 +171,22 @@ failure and exits non-zero. It does not create output or call a predictor.
 
 ## Experimental model adapter
 
-The default experimental encoder is
+The default experimental English encoder is
 [`MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c`](https://huggingface.co/MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c),
 pinned to a full commit revision. It is an NLI encoder used for zero-shot
 classification, not a generative LLM. The public taxonomy has ten subsystem
-labels and five severity labels. Predictions include labels, scores, abstention,
-and model provenance; they do not copy the source message.
+labels and five severity labels. Predictions include labels, scores,
+abstention, model/profile provenance, and a deterministic configuration digest;
+they do not copy the source message. An opt-in BGE-M3 profile covers the
+intended four-language scope without claiming measured accuracy.
 
 See [model selection](docs/model-selection.md) for the rationale and
 [synthetic evaluation results](docs/results/2026-08-07-synthetic-evaluation.md)
 for the first honest, deliberately small measurement. The separate
 [local web security validation](docs/results/2026-08-07-web-security-validation.md)
 records the current authentication, upload, packaging, and privacy checks.
+The [multilingual smoke baseline](docs/results/2026-08-07-multilingual-smoke-baseline.md)
+records the rules adapter's limitations on the balanced development fixture.
 
 ## Running tests
 
@@ -179,8 +197,8 @@ The suite covers strict parsing, aggregate validation errors, predictor count
 mismatches, exceptions in later chunks, symlink and path aliases, overwrite
 behavior, resource-limit boundaries, Unicode JSONL separators, bounded predictor
 output, atomic cleanup, post-publication durability errors, workspace RBAC,
-session-bound CSRF, bounded uploads, security headers, and privacy-minimal web
-exports. Web integration tests require `.[web,test]`.
+pre-session and session-bound CSRF, bounded uploads, security headers, and
+privacy-minimal web exports. Web integration tests require `.[web,test]`.
 
 ## Security and privacy
 
@@ -196,8 +214,8 @@ exports. Web integration tests require `.[web,test]`.
 
 ## Current limitations
 
-- The zero-shot adapter is experimental and English-oriented; its scores are not
-  calibrated probabilities.
+- Both zero-shot profiles are experimental; their scores are not calibrated
+  probabilities, and the multilingual profile has not completed a model run.
 - Model artifacts and optional dependencies are not bundled.
 - The Gradio UI is an unauthenticated localhost demonstration. The separate web
   workspace is authenticated but remains localhost-only and alpha.
@@ -229,8 +247,9 @@ exports. Web integration tests require `.[web,test]`.
 4. Add an explicit artifact manifest and cache verification workflow.
 5. Review cross-platform publication semantics and document supported
    filesystems.
-6. Localize the web workflow for English, Italian, French, and Spanish and
-   benchmark an explicitly multilingual classifier before making accuracy claims.
+6. Benchmark the pinned multilingual profile on the quadrilingual development
+   fixture, then build a larger independently reviewed holdout before making
+   accuracy claims.
 7. Add rate limits and a deployment threat model before considering any
    non-loopback API or web exposure.
 8. Add bounded syslog ingestion with backpressure, source authentication, and a

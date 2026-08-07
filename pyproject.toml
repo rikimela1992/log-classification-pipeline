@@ -51,4 +51,5 @@ log_classification_pipeline = [
     "web/static/*.css",
     "web/static/*.js",
     "web/templates/*.html",
+    "web/locales/*.json",
 ]

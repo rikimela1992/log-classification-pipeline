@@ -5,6 +5,10 @@ import unittest
 from log_classification_pipeline.adapters.rules import RulesPredictor
 from log_classification_pipeline.adapters.zero_shot import ZeroShotConfig, ZeroShotPredictor
 from log_classification_pipeline.contracts import PredictionContractError
+from log_classification_pipeline.model_profiles import (
+    MULTILINGUAL_PROFILE_ID,
+    get_model_profile,
+)
 from log_classification_pipeline.taxonomy import SEVERITY_CANDIDATES, SUBSYSTEM_CANDIDATES
 
 
@@ -83,18 +87,41 @@ class ZeroShotConfigTests(unittest.TestCase):
     def test_invalid_configuration_is_rejected(self) -> None:
         cases = (
             {"model_source": " "},
+            {"model_source": None},
             {"model_id": " "},
+            {"model_id": 1},
             {"revision": " "},
+            {"revision": 1},
             {"confidence_threshold": True},
             {"confidence_threshold": -0.1},
             {"confidence_threshold": 1.1},
+            {"subsystem_threshold": True},
+            {"subsystem_threshold": -0.1},
+            {"severity_threshold": 1.1},
             {"inference_batch_size": True},
             {"inference_batch_size": 0},
+            {"profile_id": MULTILINGUAL_PROFILE_ID},
+            {"profile_id": "outside-registry"},
         )
         for kwargs in cases:
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(ValueError):
                     ZeroShotConfig(**kwargs)
+
+    def test_versioned_profile_resolves_model_and_stable_configuration(self) -> None:
+        profile = get_model_profile(MULTILINGUAL_PROFILE_ID)
+        config = ZeroShotConfig.from_profile(
+            MULTILINGUAL_PROFILE_ID,
+            subsystem_threshold=0.7,
+            severity_threshold=0.5,
+        )
+
+        self.assertEqual(config.model_id, profile.model_id)
+        self.assertEqual(config.revision, profile.model_revision)
+        self.assertEqual(config.resolved_subsystem_threshold, 0.7)
+        self.assertEqual(config.resolved_severity_threshold, 0.5)
+        self.assertRegex(config.configuration_digest, r"^sha256:[0-9a-f]{64}$")
+        self.assertEqual(config.configuration_digest, config.configuration_digest)
 
 
 class ZeroShotPredictorTests(unittest.TestCase):
@@ -108,8 +135,6 @@ class ZeroShotPredictorTests(unittest.TestCase):
 
         config = ZeroShotConfig(
             model_source="local-model",
-            model_id="logical-model",
-            revision="sha256:fixture",
             confidence_threshold=0.8,
             inference_batch_size=3,
         )
@@ -124,7 +149,13 @@ class ZeroShotPredictorTests(unittest.TestCase):
         self.assertEqual(len(fake.calls), 4)
         self.assertEqual(predictions[0]["subsystem"], {"label": "network", "score": 0.91})
         self.assertEqual(predictions[0]["severity"], {"label": "warning", "score": 0.82})
-        self.assertEqual(predictions[0]["model"], {"id": "logical-model", "revision": "sha256:fixture"})
+        model = predictions[0]["model"]
+        profile = get_model_profile("english-deberta-v1")
+        self.assertEqual(model["id"], profile.model_id)
+        self.assertEqual(model["revision"], profile.model_revision)
+        self.assertEqual(model["profile_id"], "english-deberta-v1")
+        self.assertEqual(model["profile_revision"], "1")
+        self.assertRegex(model["config_sha256"], r"^sha256:[0-9a-f]{64}$")
         for _, kwargs in fake.calls:
             self.assertFalse(kwargs["multi_label"])
             self.assertTrue(kwargs["truncation"])
@@ -142,6 +173,17 @@ class ZeroShotPredictorTests(unittest.TestCase):
         fake = FakeZeroShotPipeline(subsystem_score=0.9, severity_score=0.59)
         predictor = ZeroShotPredictor(pipeline_factory=lambda config: fake)
         self.assertTrue(predictor([{"message": "synthetic"}])[0]["abstained"])
+
+    def test_head_specific_thresholds_are_applied(self) -> None:
+        fake = FakeZeroShotPipeline(subsystem_score=0.65, severity_score=0.55)
+        predictor = ZeroShotPredictor(
+            ZeroShotConfig(
+                subsystem_threshold=0.6,
+                severity_threshold=0.5,
+            ),
+            pipeline_factory=lambda config: fake,
+        )
+        self.assertFalse(predictor([{"message": "synthetic"}])[0]["abstained"])
 
     def test_wrong_count_and_unknown_candidate_fail_closed(self) -> None:
         class WrongCountPipeline:
