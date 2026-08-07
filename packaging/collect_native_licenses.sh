@@ -68,8 +68,26 @@ while IFS= read -r library; do
                 fi
             done
             if [ -z "$license_files" ]; then
-                printf '%s\n' "cannot locate RPM license for $library" >&2
-                exit 1
+                declared_license=$(
+                    rpm -q --queryformat '%{LICENSE}' "$package"
+                )
+                case "$declared_license" in
+                    ""|"(none)")
+                        printf '%s\n' \
+                            "cannot locate RPM license evidence for $library" >&2
+                        exit 1
+                        ;;
+                esac
+                destination="$output_directory/$package.txt"
+                {
+                    printf 'Native library: %s\n' "$library"
+                    printf 'RPM package: %s\n' "$package"
+                    printf 'Source RPM: %s\n' "$source_rpm"
+                    printf 'Declared license: %s\n' "$declared_license"
+                    printf '%s\n' \
+                        'No standalone license text is installed by this Fedora package or an installed sibling from the same source RPM.'
+                } > "$destination"
+                continue
             fi
         fi
         destination="$output_directory/$package.txt"

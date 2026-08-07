@@ -63,6 +63,8 @@ class LinuxPackagingTests(unittest.TestCase):
         ).read_text(encoding="utf-8")
         self.assertIn("%{SOURCERPM}", native_licenses)
         self.assertIn("sibling_packages", native_licenses)
+        self.assertIn("%{LICENSE}", native_licenses)
+        self.assertIn("cannot locate RPM license evidence", native_licenses)
 
     def test_appstream_identity_filename_and_homepage_are_consistent(self) -> None:
         metadata = ElementTree.parse(

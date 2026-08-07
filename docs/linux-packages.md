@@ -70,8 +70,10 @@ outside the supported alpha profile.
 The final workflow artifact includes `SHA256SUMS`, dependency lock snapshots,
 a CycloneDX Python-runtime inventory, a Syft-generated SPDX inventory of the
 frozen bundle and native libraries, embedded Python dependency license texts,
-the pinned CPython license, and native-library license files collected from
-the build distribution. Verify all downloaded files before installation:
+the pinned CPython license, and native-library license evidence collected from
+the build distribution. For RPM dependencies that install no standalone
+license text, the evidence records the package, source RPM, and declared
+license expression. Verify all downloaded files before installation:
 
 ```console
 sha256sum --check --strict SHA256SUMS
