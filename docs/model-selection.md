@@ -39,9 +39,11 @@ task and provenance explicit.
 ## Smaller fallback
 
 [`cross-encoder/nli-MiniLM2-L6-H768`](https://huggingface.co/cross-encoder/nli-MiniLM2-L6-H768)
-is the planned CPU-oriented comparison. Its Apache-2.0 model card exposes
-PyTorch, ONNX, and OpenVINO artifacts. It is not the default until both models
-are measured on the same independently authored fixture.
+remains useful as an English CPU-oriented comparison. Its Apache-2.0 model card
+exposes PyTorch, ONNX, and OpenVINO artifacts, but it does not by itself satisfy
+the project's explicit English, Italian, French, and Spanish requirement. A
+smaller multilingual NLI checkpoint must be selected and measured on the same
+independently authored fixture before it can become an interactive default.
 
 ## Artifact policy
 
@@ -88,8 +90,9 @@ Downloads remain disabled unless `--allow-download` is also supplied.
 
 ## Known risks
 
-- DeBERTa is English-oriented; BGE-M3 is larger and has not yet been measured
-  on the committed multilingual fixture.
+- DeBERTa is English-oriented. BGE-M3 loaded successfully on the measured CPU
+  host, but a 40-record run did not complete within five minutes and was
+  interrupted without metrics.
 - NLI cost grows with records multiplied by candidate labels.
 - Scores depend on candidate wording and the hypothesis template.
 - Scores are not calibrated probabilities and do not create a true unknown

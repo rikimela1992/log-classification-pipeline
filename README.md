@@ -155,9 +155,11 @@ experimental profile explicitly:
       --adapter zero-shot --model-profile multilingual-bge-m3-v1 \
       --allow-download
 
-This can download an approximately 1.14 GB model. Profile resolution and the
-adapter contract are tested, but the artifact has not been loaded for this
-snapshot and its classification quality has not yet been measured here.
+This can download an approximately 1.14 GB model. Profile resolution, artifact
+loading, and the adapter contract are tested. A controlled 4-vCPU run did not
+finish the 40-record development fixture within five minutes, so this profile
+is not suitable for the synchronous interactive CPU path on the measured host.
+Its classification quality has not yet been measured here.
 
 ## Synthetic example
 
@@ -214,8 +216,9 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
 
 ## Current limitations
 
-- Both zero-shot profiles are experimental; their scores are not calibrated
-  probabilities, and the multilingual profile has not completed a model run.
+- Both zero-shot profiles are experimental and their scores are not calibrated
+  probabilities. The multilingual profile loaded successfully but did not
+  complete the 40-record CPU capacity run within five minutes.
 - Model artifacts and optional dependencies are not bundled.
 - The Gradio UI is an unauthenticated localhost demonstration. The separate web
   workspace is authenticated but remains localhost-only and alpha.
@@ -243,13 +246,15 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
 1. Define measured operational profiles and evaluate conservative default limits.
 2. Calibrate abstention and severity labels on a larger, independently authored
    synthetic evaluation set.
-3. Benchmark the smaller MiniLM fallback and measure warm/cold CPU behavior.
+3. Select and benchmark a genuinely multilingual smaller fallback, then measure
+   warm/cold CPU behavior; do not assume the English MiniLM candidate satisfies
+   the four-language requirement.
 4. Add an explicit artifact manifest and cache verification workflow.
 5. Review cross-platform publication semantics and document supported
    filesystems.
-6. Benchmark the pinned multilingual profile on the quadrilingual development
-   fixture, then build a larger independently reviewed holdout before making
-   accuracy claims.
+6. Run the pinned multilingual profile on suitable GPU or asynchronous batch
+   infrastructure, then build a larger independently reviewed holdout before
+   making accuracy claims.
 7. Add rate limits and a deployment threat model before considering any
    non-loopback API or web exposure.
 8. Add bounded syslog ingestion with backpressure, source authentication, and a
