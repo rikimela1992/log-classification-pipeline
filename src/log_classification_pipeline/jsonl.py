@@ -85,6 +85,8 @@ def read_jsonl(
         raise BatchValidationError(
             [ValidationIssue(line_number=line_number, reason="input is not valid UTF-8")]
         ) from exc
+    if text.startswith("\ufeff"):
+        text = text[1:]
 
     records: list[dict[str, Any]] = []
     issues: list[ValidationIssue] = []

@@ -11,6 +11,7 @@ from typing import Any
 
 from .batch import Predictor, process_batch
 from .contracts import BatchResourceLimitError
+from .defaults import DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_RECORDS
 from .workspace import Workspace
 
 
@@ -50,8 +51,8 @@ def classify_file_preview(
     predictor: Predictor,
     *,
     preview_limit: int = 20,
-    max_input_bytes: int = 1_000_000,
-    max_records: int = 1_000,
+    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
+    max_records: int = DEFAULT_MAX_RECORDS,
 ) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     """Classify a file and return aggregate metadata plus a bounded preview."""
 
@@ -84,8 +85,8 @@ def classify_file_into_workspace(
     *,
     store_raw: bool = False,
     batch_size: int = 64,
-    max_input_bytes: int = 1_000_000,
-    max_records: int = 1_000,
+    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
+    max_records: int = DEFAULT_MAX_RECORDS,
 ) -> tuple[dict[str, Any], str]:
     """Classify completely, then atomically persist a successful workspace job."""
 

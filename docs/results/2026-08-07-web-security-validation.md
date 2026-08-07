@@ -11,8 +11,8 @@ workflow, **not** a production security assessment or penetration test.
 
 | Check | Result |
 | --- | --- |
-| Complete suite with `web` and `test` extras | 157 tests passed |
-| Core-only environment | 129 tests passed; 28 web tests intentionally skipped |
+| Complete suite with `web` and `test` extras | 173 tests passed |
+| Core-only environment | 143 tests passed; 30 web tests intentionally skipped |
 | Python/TOML parsing | passed |
 | `git diff --check` | passed |
 | Local wheel build | passed |
@@ -29,7 +29,9 @@ The web integration cases cover:
 - pre-session and session-bound CSRF plus exact Origin checks for
   state-changing UI requests;
 - viewer denial before upload parsing and predictor invocation;
-- byte, record, whole-request, multipart, and streamed-body limits;
+- JSONL, NDJSON, TXT, LOG, and CSV upload validation with exact source digest;
+- 25 MiB/25,000-record application defaults, a 50 MiB aggregate queue-byte
+  cap, and whole-request, multipart, and streamed-body limits;
 - ignored hostile filenames and privacy-minimal result export;
 - HTML autoescaping for untrusted model metadata;
 - validated English, Italian, French, and Spanish catalogs, bounded language

@@ -4,7 +4,7 @@
 
 The optional web extra provides an alpha, localhost-only interface over the
 same authenticated workspace used by the CLI. It is intended for one operator
-or a small trusted team on one machine to classify sanitized JSONL, consult
+or a small trusted team on one machine to classify sanitized log files, consult
 completed jobs, and export privacy-minimal results.
 
 It is **not production-ready** and must not be exposed directly to a LAN or the
@@ -27,12 +27,16 @@ Open `http://127.0.0.1:8080/app`. The command binds only to `127.0.0.1`, disable
 proxy-header trust and access logging, and refuses an unknown or unsafe
 workspace database. Stop it with `Ctrl-C`.
 
-The default queue admits at most eight jobs, including the one running job,
-and reports progress every 16 records. Both values are explicit CLI controls:
+The default application limit is 25 MiB and 25,000 records per file. The queue
+admits at most eight jobs and 50 MiB of raw bytes in aggregate, including the
+running job, and reports progress every 16 records. These values are explicit
+CLI controls:
 
 ```console
 .venv/bin/log-classify web ./state/workspace.sqlite3 \
-  --queue-capacity 8 --worker-batch-size 16
+  --max-input-bytes 26214400 --max-records 25000 \
+  --queue-capacity 8 --queue-byte-capacity 52428800 \
+  --worker-batch-size 16
 ```
 
 The default login policy permits five failed attempts for one account and
@@ -88,7 +92,7 @@ registered catalog without loading an artifact.
 | Operation | Admin | Analyst | Viewer |
 | --- | --- | --- | --- |
 | Consult and export stored results | yes | yes | yes |
-| Upload and classify JSONL | yes | yes | no |
+| Upload and classify JSONL, NDJSON, TXT, LOG, or CSV | yes | yes | no |
 | Cancel own active job | yes | yes | no |
 | Cancel another user's active job | yes | no | no |
 | Create users and change retention | yes | no | no |
@@ -112,7 +116,8 @@ only in the session-creation response; the database stores their SHA-256
 digests. `DELETE /api/v1/session` revokes the current session.
 
 The API accepts either JSON records at `/api/v1/classifications` or a multipart
-JSONL file at `/api/v1/classifications/file`. Both validate the complete input,
+JSONL, NDJSON, TXT, LOG, or CSV file at `/api/v1/classifications/file`. The
+multipart filename must carry one of those extensions. Both validate the complete input,
 admit it to the bounded queue, and return `202 Accepted` with `Location`,
 `Retry-After: 1`, a job ID, and a status URL. Result exports use NDJSON and are
 available only after terminal success.
@@ -124,7 +129,7 @@ available only after terminal success.
 | `GET /api/v1/me` | Inspect the current principal |
 | `GET /api/v1/models` | List configured model metadata without loading artifacts |
 | `POST /api/v1/classifications` | Validate and queue a bounded JSON `records` array |
-| `POST /api/v1/classifications/file` | Validate and queue a bounded multipart JSONL upload |
+| `POST /api/v1/classifications/file` | Validate and queue a bounded multipart log-file upload |
 | `GET /api/v1/jobs?limit=50&offset=0` | List recent jobs with `next_offset` |
 | `GET /api/v1/jobs/{id}` | Read one organization-scoped job |
 | `GET /api/v1/jobs/{id}/status` | Poll progress without adding audit events |
@@ -171,8 +176,8 @@ OpenAPI document.
   session-bound token.
 - API and UI authorization occurs before classification request bodies are
   parsed or predictors are invoked.
-- Request, input-byte, record-count, queue-capacity, and worker-chunk limits fail
-  closed. Application errors after Host validation return sanitized problem
+- Request, input-byte, record-count, queue-job, aggregate queue-byte, and
+  worker-chunk limits fail closed. Application errors after Host validation return sanitized problem
   documents without input content.
 - HTML templates autoescape model and result fields. Local CSS and JavaScript
   work under a restrictive Content Security Policy.

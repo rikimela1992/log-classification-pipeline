@@ -1,0 +1,22 @@
+[Unit]
+Description=Log Classification Pipeline alpha local workspace
+Documentation=https://github.com/rikimela1992/log-classification-pipeline
+After=local-fs.target
+
+[Service]
+Type=simple
+User=log-classify
+Group=log-classify
+WorkingDirectory=/var/lib/log-classification-pipeline
+ExecStart=/usr/lib/log-classification-pipeline/log-classify web /var/lib/log-classification-pipeline/workspace.sqlite3
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/log-classification-pipeline
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

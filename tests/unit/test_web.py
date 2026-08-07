@@ -768,6 +768,93 @@ class WebApplicationTests(unittest.TestCase):
         )
         self.assertEqual(oversized.status_code, 413, oversized.text)
 
+    def test_file_upload_accepts_text_log_and_csv_but_rejects_unknown_suffix(self) -> None:
+        token = self.api_login("analyst", "analyst-password-value")
+        fixtures = (
+            ("synthetic.txt", b"Backup completed\nAuthentication failed\n"),
+            ("synthetic.log", b"Service started\r\n"),
+            (
+                "synthetic.csv",
+                b'message,component\r\n"Backup completed",worker\r\n',
+            ),
+        )
+        for filename, payload in fixtures:
+            with self.subTest(filename=filename):
+                accepted = self.client.post(
+                    "/api/v1/classifications/file",
+                    headers=self.bearer(token),
+                    data={"model": "rules"},
+                    files={"upload": (filename, payload, "application/octet-stream")},
+                )
+                self.assertEqual(accepted.status_code, 202, accepted.text)
+                self.assertEqual(
+                    self.wait_for_job(accepted.json()["job_id"], token)["status"],
+                    "succeeded",
+                )
+
+        before = self.client.get("/api/v1/jobs", headers=self.bearer(token)).json()
+        rejected = self.client.post(
+            "/api/v1/classifications/file",
+            headers=self.bearer(token),
+            files={"upload": ("synthetic.exe", b"synthetic event\n")},
+        )
+        self.assertEqual(rejected.status_code, 422, rejected.text)
+        after = self.client.get("/api/v1/jobs", headers=self.bearer(token)).json()
+        self.assertEqual(len(after["items"]), len(before["items"]))
+
+    def test_aggregate_queue_byte_limit_rejects_without_orphan_job(self) -> None:
+        self.app.state.job_queue.close()
+        predictor = BlockingPredictor()
+        bounded_app = create_app(
+            WebSettings(
+                self.database,
+                allowed_hosts=("testserver",),
+                max_input_bytes=1_000,
+                max_records=10,
+                max_request_bytes=4_096,
+                max_admitted_jobs=8,
+                max_admitted_bytes=1_000,
+                worker_batch_size=1,
+            ),
+            {"slow": predictor},
+        )
+        with TestClient(
+            bounded_app,
+            base_url="http://testserver",
+            raise_server_exceptions=False,
+        ) as client:
+            session = client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "analyst",
+                    "password": "analyst-password-value",
+                },
+            )
+            token = session.json()["access_token"]
+            first_payload = (b"a" * 600) + b"\n"
+            first = client.post(
+                "/api/v1/classifications/file",
+                headers=self.bearer(token),
+                data={"model": "slow"},
+                files={"upload": ("first.txt", first_payload)},
+            )
+            self.assertEqual(first.status_code, 202, first.text)
+            self.assertTrue(predictor.started.wait(1.0))
+
+            second = client.post(
+                "/api/v1/classifications/file",
+                headers=self.bearer(token),
+                data={"model": "slow"},
+                files={"upload": ("second.log", (b"b" * 600) + b"\n")},
+            )
+            self.assertEqual(second.status_code, 503, second.text)
+            self.assertEqual(second.json()["code"], "queue_full")
+            jobs = client.get("/api/v1/jobs", headers=self.bearer(token))
+            self.assertEqual(len(jobs.json()["items"]), 1)
+            predictor.release.set()
+            self.assertTrue(bounded_app.state.job_queue.wait_until_idle(5.0))
+
     def test_unknown_model_is_sanitized_and_openapi_excludes_ui_routes(self) -> None:
         token = self.api_login("analyst", "analyst-password-value")
         rejected = self.client.post(
@@ -861,6 +948,10 @@ class WebApplicationTests(unittest.TestCase):
         self.ui_login()
         dashboard = self.client.get("/app")
         self.assertIn("Classification workspace", dashboard.text)
+        self.assertIn(".txt", dashboard.text)
+        self.assertIn(".log", dashboard.text)
+        self.assertIn(".csv", dashboard.text)
+        self.assertIn("10 records", dashboard.text)
         self.assertNotIn(self.client.cookies.get("lcp_session"), dashboard.text)
         self.assertNotIn("retain raw", dashboard.text.casefold())
 

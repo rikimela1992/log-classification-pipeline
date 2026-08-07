@@ -34,6 +34,12 @@ from ..contracts import (
     BatchValidationError,
     PredictionContractError,
 )
+from ..defaults import (
+    DEFAULT_MAX_ADMITTED_BYTES,
+    DEFAULT_MAX_INPUT_BYTES,
+    DEFAULT_MAX_RECORDS,
+)
+from ..inputs import InputFormat, read_input_file, resolve_input_format
 from ..workspace import (
     AuthenticationError,
     AuthorizationError,
@@ -44,7 +50,7 @@ from ..workspace import (
     Workspace,
     WorkspaceError,
 )
-from ..jsonl import ParsedBatch, read_jsonl
+from ..jsonl import ParsedBatch
 from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
 from ..model_profiles import MODEL_PROFILES
 from .i18n import SUPPORTED_LOCALES, load_catalogs, negotiate_locale, translator
@@ -68,10 +74,11 @@ class WebSettings:
     database_path: Path
     allowed_hosts: tuple[str, ...] = ("127.0.0.1", "localhost")
     cookie_secure: bool = False
-    max_input_bytes: int = 1_000_000
-    max_records: int = 1_000
-    max_request_bytes: int = 1_262_144
+    max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES
+    max_records: int = DEFAULT_MAX_RECORDS
+    max_request_bytes: int = DEFAULT_MAX_INPUT_BYTES + 262_144
     max_admitted_jobs: int = 8
+    max_admitted_bytes: int = DEFAULT_MAX_ADMITTED_BYTES
     worker_batch_size: int = 16
     login_account_limit: int = 5
     login_source_limit: int = 20
@@ -85,6 +92,7 @@ class WebSettings:
             ("max_records", self.max_records),
             ("max_request_bytes", self.max_request_bytes),
             ("max_admitted_jobs", self.max_admitted_jobs),
+            ("max_admitted_bytes", self.max_admitted_bytes),
             ("worker_batch_size", self.worker_batch_size),
             ("login_account_limit", self.login_account_limit),
             ("login_source_limit", self.login_source_limit),
@@ -94,6 +102,10 @@ class WebSettings:
                 raise ValueError(f"{name} must be a positive integer")
         if self.max_request_bytes <= self.max_input_bytes:
             raise ValueError("max_request_bytes must exceed max_input_bytes")
+        if self.max_admitted_bytes < self.max_input_bytes:
+            raise ValueError(
+                "max_admitted_bytes must be greater than or equal to max_input_bytes"
+            )
         if self.login_source_limit < self.login_account_limit:
             raise ValueError(
                 "login_source_limit must be greater than or equal to "
@@ -469,11 +481,13 @@ async def _save_upload(upload: UploadFile, path: Path, *, max_bytes: int) -> int
 def _read_validated_payload(
     path: Path,
     *,
+    input_format: str,
     max_input_bytes: int,
     max_records: int,
 ) -> tuple[bytes, ParsedBatch]:
-    parsed = read_jsonl(
+    parsed = read_input_file(
         path,
+        input_format=input_format,
         max_input_bytes=max_input_bytes,
         max_records=max_records,
     )
@@ -512,6 +526,7 @@ def create_app(
         workspace,
         model_registry,
         max_admitted_jobs=settings.max_admitted_jobs,
+        max_admitted_bytes=settings.max_admitted_bytes,
         batch_size=settings.worker_batch_size,
         max_input_bytes=settings.max_input_bytes,
         max_records=settings.max_records,
@@ -644,11 +659,17 @@ def create_app(
             username,
         )
 
-    def enqueue_sync(path: Path, model_name: str, token: str) -> str:
+    def enqueue_sync(
+        path: Path,
+        model_name: str,
+        token: str,
+        input_format: str = "jsonl",
+    ) -> str:
         if model_name not in model_registry:
             raise ValueError("unknown configured model")
         payload, parsed = _read_validated_payload(
             path,
+            input_format=input_format,
             max_input_bytes=settings.max_input_bytes,
             max_records=settings.max_records,
         )
@@ -658,6 +679,7 @@ def create_app(
             payload,
             parsed.source_sha256,
             len(parsed.records),
+            input_format,
         )
 
     def accepted_job(job_id: str) -> JSONResponse:
@@ -942,6 +964,7 @@ def create_app(
                 input_path,
                 payload.model,
                 token,
+                "jsonl",
             )
         return accepted_job(job_id)
 
@@ -951,14 +974,16 @@ def create_app(
         model: Annotated[str, Form()] = "rules",
         token: str = Security(api_token),
     ) -> JSONResponse:
+        input_format: InputFormat = resolve_input_format(upload.filename or "")
         with tempfile.TemporaryDirectory(prefix="log-classify-web-") as directory:
-            input_path = Path(directory) / "input.jsonl"
+            input_path = Path(directory) / "input.data"
             await _save_upload(upload, input_path, max_bytes=settings.max_input_bytes)
             job_id = await run_in_threadpool(
                 enqueue_sync,
                 input_path,
                 model,
                 token,
+                input_format,
             )
         return accepted_job(job_id)
 
@@ -1076,6 +1101,8 @@ def create_app(
             "job_offset": job_offset,
             "jobs": jobs,
             "models": model_options,
+            "max_input_mib": round(settings.max_input_bytes / (1024 * 1024), 1),
+            "max_records": settings.max_records,
             "policy": None,
             "principal": principal,
             "users": [],
@@ -1205,14 +1232,16 @@ def create_app(
         model: Annotated[str, Form()] = "rules",
     ):
         token = await run_in_threadpool(cookie_token, request)
+        input_format: InputFormat = resolve_input_format(upload.filename or "")
         with tempfile.TemporaryDirectory(prefix="log-classify-web-") as directory:
-            input_path = Path(directory) / "input.jsonl"
+            input_path = Path(directory) / "input.data"
             await _save_upload(upload, input_path, max_bytes=settings.max_input_bytes)
             job_id = await run_in_threadpool(
                 enqueue_sync,
                 input_path,
                 model,
                 token,
+                input_format,
             )
         return RedirectResponse(f"/app/jobs/{job_id}", status_code=303)
 

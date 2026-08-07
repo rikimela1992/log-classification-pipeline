@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Log Classification Pipeline
+Comment=Alpha local log classification workspace
+Exec=log-classification-pipeline
+Icon=log-classification-pipeline
+Terminal=true
+Categories=System;Security;
+Keywords=logs;classification;security;

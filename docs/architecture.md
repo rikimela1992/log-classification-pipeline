@@ -2,10 +2,10 @@
 
 ## Scope
 
-The core is a model-independent boundary for synthetic or already-sanitized
-JSONL batches. Optional adapters, a CLI, and a localhost-only UI sit outside the
-core boundary and reuse the same validation, orchestration, and atomic
-publication path.
+The core is a model-independent boundary for bounded synthetic or
+already-sanitized JSONL, NDJSON, TXT, LOG, and CSV batches. Optional adapters,
+a CLI, and a localhost-only UI sit outside the core boundary and reuse the same
+validation, orchestration, and atomic publication path.
 
 ![Fail-closed batch pipeline](assets/pipeline-overview.svg)
 
@@ -14,6 +14,7 @@ publication path.
 | Component | Responsibility | Failure behavior |
 |---|---|---|
 | jsonl.py | Enforce optional byte/record limits, decode UTF-8, reject invalid JSON constructs, retain valid records, compute input identity | Reject a limit breach or collect validation issues and reject the whole batch |
+| inputs.py | Select a supported format, preserve exact source identity, and validate text or CSV structure | Reject unsupported suffixes, malformed CSV, invalid UTF-8, or any limit breach before prediction |
 | contracts.py | Validate stable input fields and predictor output mappings | Return line-specific issues or raise a predictor contract error |
 | batch.py | Validate before prediction, chunk records, report staged progress, check cooperative cancellation, consume at most one excess output, enforce one output per input | Stop before publication if input, cancellation, or predictor behavior is invalid |
 | atomic.py | Encode JSONL, apply permissions, sync a temporary file, publish, sync the directory | Attempt pre-publication temporary cleanup; distinguish committed failures |
@@ -24,14 +25,16 @@ publication path.
 | application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
 | workspace.py | Persist versioned job states with local users, roles, sessions, retention, worker capabilities, and audit | Deny before prediction; apply state transitions and terminal results atomically |
-| web/worker.py | Run a bounded, single-worker, in-memory queue behind a process lock | Keep raw bytes out of SQLite, cancel between chunks, and fail interrupted work without partial results |
+| web/worker.py | Run a job-count and aggregate-byte-bounded, single-worker, in-memory queue behind a process lock | Keep raw bytes out of SQLite, cancel between chunks, and fail interrupted work without partial results |
 | web/app.py / web/i18n.py / web/rate_limit.py | Provide an authenticated loopback API and localized server-rendered UI | Throttle failed login attempts, authenticate, authorize, check CSRF, validate catalogs, and enforce request limits before parsing uploads or invoking a predictor |
 
 ## Processing sequence
 
 1. Read the input with an optional byte bound and calculate its SHA-256 digest.
-2. Decode UTF-8 and parse LF-delimited, non-blank JSONL lines with duplicate-key and
-   non-finite-number rejection.
+2. Decode UTF-8 and select the parser from an explicit format or supported file
+   suffix. JSONL/NDJSON reject duplicate keys and non-finite numbers; TXT/LOG
+   map non-blank LF-delimited lines to messages; CSV enforces a unique header,
+   exact `message` field, and fixed row shape.
 3. Enforce an optional non-blank record-line bound and aggregate input issues.
    If a limit or validation issue occurs, reject the complete batch before
    invoking the predictor.

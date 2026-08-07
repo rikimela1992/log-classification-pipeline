@@ -30,6 +30,14 @@ class JsonlTests(unittest.TestCase):
         self.assertEqual(parsed.source_sha256, hashlib.sha256(payload).hexdigest())
         self.assertEqual(parsed.batch_id, f"sha256:{parsed.source_sha256}")
 
+    def test_utf8_bom_is_accepted_without_changing_source_identity(self) -> None:
+        payload = b'\xef\xbb\xbf{"message":"synthetic event"}\n'
+        with tempfile.TemporaryDirectory() as raw_directory:
+            parsed = read_jsonl(self._write(Path(raw_directory), payload))
+
+        self.assertEqual(parsed.records[0]["message"], "synthetic event")
+        self.assertEqual(parsed.source_sha256, hashlib.sha256(payload).hexdigest())
+
     def test_all_invalid_lines_are_reported(self) -> None:
         payload = (
             b'{"message":"valid"}\n'

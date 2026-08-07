@@ -66,7 +66,7 @@ log-classify workspace user-add ./state/workspace.sqlite3 sample-org owner \
   reviewer --role viewer
 ```
 
-Classify synthetic JSONL. Only complete, validated results become visible in
+Classify synthetic JSONL, NDJSON, TXT, LOG, or CSV. Only complete, validated results become visible in
 the database. The source bytes are not retained by default.
 
 ```console

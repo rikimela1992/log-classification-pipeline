@@ -1,0 +1,12 @@
+Package: log-classification-pipeline
+Version: @VERSION@
+Section: utils
+Priority: optional
+Architecture: amd64
+Maintainer: Riccardo Melini
+Depends: adduser, systemd
+Installed-Size: @INSTALLED_SIZE@
+Homepage: https://github.com/rikimela1992/log-classification-pipeline
+Description: Alpha local fail-closed log classification workspace
+ Self-contained browser workspace and CLI for bounded log classification.
+ This package is not production-ready and includes no model or dataset.

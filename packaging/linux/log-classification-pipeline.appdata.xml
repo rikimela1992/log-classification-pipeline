@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>log-classification-pipeline</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Log Classification Pipeline</name>
+  <summary>Alpha local fail-closed log classification workspace</summary>
+  <description>
+    <p>
+      A localhost-only authenticated workspace for bounded log classification,
+      consultation, and privacy-minimal result export.
+    </p>
+    <p>This alpha is not production-ready and includes no machine-learning model.</p>
+  </description>
+  <launchable type="desktop-id">log-classification-pipeline.desktop</launchable>
+  <url type="homepage">https://github.com/rikimela1992/log-classification-pipeline</url>
+  <releases>
+    <release version="0.1.0-alpha.1" date="2026-08-07" type="development"/>
+  </releases>
+  <content_rating type="oars-1.1"/>
+</component>

@@ -25,6 +25,12 @@ from ..contracts import (
     BatchValidationError,
     PredictionContractError,
 )
+from ..defaults import (
+    DEFAULT_MAX_ADMITTED_BYTES,
+    DEFAULT_MAX_INPUT_BYTES,
+    DEFAULT_MAX_RECORDS,
+)
+from ..inputs import InputFormat, resolve_input_format
 from ..workspace import NotFoundError, Workspace
 
 
@@ -43,6 +49,7 @@ class _QueuedWork:
     model_name: str
     payload: bytearray
     source_sha256: str
+    input_format: InputFormat
 
 
 class LocalClassificationQueue:
@@ -54,27 +61,35 @@ class LocalClassificationQueue:
         predictors: Mapping[str, Predictor],
         *,
         max_admitted_jobs: int = 8,
+        max_admitted_bytes: int = DEFAULT_MAX_ADMITTED_BYTES,
         batch_size: int = 16,
-        max_input_bytes: int = 1_000_000,
-        max_records: int = 1_000,
+        max_input_bytes: int = DEFAULT_MAX_INPUT_BYTES,
+        max_records: int = DEFAULT_MAX_RECORDS,
     ) -> None:
         for name, value in (
             ("max_admitted_jobs", max_admitted_jobs),
+            ("max_admitted_bytes", max_admitted_bytes),
             ("batch_size", batch_size),
             ("max_input_bytes", max_input_bytes),
             ("max_records", max_records),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
+        if max_admitted_bytes < max_input_bytes:
+            raise ValueError(
+                "max_admitted_bytes must be greater than or equal to max_input_bytes"
+            )
         self.workspace = workspace
         self.predictors = dict(predictors)
         self.batch_size = batch_size
         self.max_input_bytes = max_input_bytes
         self.max_records = max_records
+        self.max_admitted_jobs = max_admitted_jobs
+        self.max_admitted_bytes = max_admitted_bytes
         self._items: queue.Queue[_QueuedWork | None] = queue.Queue()
-        self._slots = threading.BoundedSemaphore(max_admitted_jobs)
         self._admission_lock = threading.Lock()
         self._admitted = 0
+        self._admitted_bytes = 0
         self._payload_lock = threading.Lock()
         self._queued_payloads: dict[str, bytearray] = {}
         self._start_lock = threading.RLock()
@@ -135,6 +150,7 @@ class LocalClassificationQueue:
         payload: bytes,
         source_sha256: str,
         input_records: int,
+        input_format: str = "jsonl",
     ) -> str:
         if model_name not in self.predictors:
             raise ValueError("unknown configured model")
@@ -148,15 +164,12 @@ class LocalClassificationQueue:
             )
         if not hashlib.sha256(payload).hexdigest() == source_sha256:
             raise ValueError("payload digest changed before queue admission")
+        resolved_format = resolve_input_format("input.data", input_format)
         with self._start_lock:
             self.start()
             if self._closed:
                 raise WorkerUnavailableError("classification worker is closed")
-            if not self._slots.acquire(blocking=False):
-                raise QueueCapacityError("classification queue is full")
-            with self._admission_lock:
-                self._admitted += 1
-                self._idle.clear()
+            self._reserve_admission(len(payload))
             try:
                 job_id, capability = self.workspace.enqueue_classification_job(
                     token,
@@ -174,6 +187,7 @@ class LocalClassificationQueue:
                         model_name=model_name,
                         payload=queued_payload,
                         source_sha256=source_sha256,
+                        input_format=resolved_format,
                     )
                 )
             except Exception:
@@ -181,10 +195,20 @@ class LocalClassificationQueue:
                     with self._payload_lock:
                         self._queued_payloads.pop(job_id, None)
                     self._zero_payload(queued_payload)
-                self._slots.release()
-                self._release_admission()
+                self._release_admission(len(payload))
                 raise
         return job_id
+
+    def _reserve_admission(self, payload_bytes: int) -> None:
+        with self._admission_lock:
+            if (
+                self._admitted >= self.max_admitted_jobs
+                or self._admitted_bytes + payload_bytes > self.max_admitted_bytes
+            ):
+                raise QueueCapacityError("classification queue is full")
+            self._admitted += 1
+            self._admitted_bytes += payload_bytes
+            self._idle.clear()
 
     def _run(self) -> None:
         try:
@@ -210,14 +234,16 @@ class LocalClassificationQueue:
                         self._zero_payload(item.payload)
                     self._items.task_done()
                     if item is not None:
-                        self._slots.release()
-                        self._release_admission()
+                        self._release_admission(len(item.payload))
         finally:
             self._release_process_lock()
 
-    def _release_admission(self) -> None:
+    def _release_admission(self, payload_bytes: int) -> None:
         with self._admission_lock:
             self._admitted -= 1
+            self._admitted_bytes -= payload_bytes
+            if self._admitted < 0 or self._admitted_bytes < 0:
+                raise RuntimeError("classification admission accounting underflow")
             if self._admitted == 0:
                 self._idle.set()
 
@@ -268,7 +294,7 @@ class LocalClassificationQueue:
         try:
             with tempfile.TemporaryDirectory(prefix="log-classify-worker-") as directory:
                 root = Path(directory)
-                input_path = root / "input.jsonl"
+                input_path = root / "input.data"
                 output_path = root / "output.jsonl"
                 self._write_private(input_path, item.payload)
 
@@ -288,6 +314,7 @@ class LocalClassificationQueue:
                     input_path,
                     output_path,
                     self.predictors[item.model_name],
+                    input_format=item.input_format,
                     batch_size=self.batch_size,
                     max_input_bytes=self.max_input_bytes,
                     max_records=self.max_records,
@@ -343,8 +370,7 @@ class LocalClassificationQueue:
                         with self._payload_lock:
                             self._queued_payloads.pop(item.job_id, None)
                         self._zero_payload(item.payload)
-                        self._slots.release()
-                        self._release_admission()
+                        self._release_admission(len(item.payload))
                 finally:
                     self._items.task_done()
             self._items.put_nowait(None)

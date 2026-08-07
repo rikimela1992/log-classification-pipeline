@@ -38,7 +38,8 @@ publishes output only after every result has passed validation.
 
 ![Fail-closed batch pipeline](docs/assets/pipeline-overview.svg)
 
-The package is organized into strict JSONL parsing, input/output contracts,
+The package is organized into bounded JSONL, NDJSON, plain-text, log, and CSV
+parsing, input/output contracts,
 batch orchestration, and atomic publication helpers. See
 [docs/architecture.md](docs/architecture.md) for component boundaries and
 failure semantics.
@@ -67,9 +68,14 @@ browser workflow is localized in English, Italian, French, and Spanish.
 
 ## Fail-closed batch contract
 
-Every non-blank input line must be a UTF-8 JSON object with a non-blank
-message string. Duplicate object keys, non-finite numbers, malformed JSON,
-invalid optional field types, and scalar top-level values are rejected.
+JSONL and NDJSON require every non-blank input line to be a UTF-8 JSON object
+with a non-blank `message` string. Duplicate object keys, non-finite numbers,
+malformed JSON, invalid optional field types, and scalar top-level values are
+rejected. TXT and LOG treat every non-blank LF-delimited line as one message.
+CSV requires a unique, non-blank header containing the exact `message` field;
+every non-blank row must have the same field count. Quoted commas and embedded
+newlines follow the Python CSV dialect. All formats preserve the SHA-256 digest
+of the exact source bytes, including a permitted UTF-8 BOM.
 
 The complete input is parsed and validated before the predictor is called. The
 predictor must then return exactly one mapping for every input record. If any
@@ -82,16 +88,17 @@ responsible for data minimization before invoking the library.
 
 ## Resource bounds
 
-`read_jsonl` and `process_batch` accept positive `max_input_bytes` and
-`max_records` limits. The byte limit is enforced while reading at most one
-byte beyond the boundary. The record limit counts non-blank JSONL lines and
-fails on the first excess line. Either failure occurs before predictor
-invocation.
+`read_input_file`, `read_jsonl`, and `process_batch` accept positive
+`max_input_bytes` and `max_records` limits. The byte limit is enforced while
+reading at most one byte beyond the boundary. The record limit counts parsed,
+non-blank records and fails on the first excess record. Either failure occurs
+before predictor invocation.
 
-Limits default to `None` to avoid inventing an operational policy for callers
-in this alpha. Applications processing untrusted data should set both values;
-the package remains an in-memory batch foundation rather than a streaming
-parser.
+The reusable library keeps `None` defaults to avoid imposing policy on callers.
+The included CLI and web application use an explicit alpha profile of 25 MiB
+and 25,000 records per file. The web queue additionally admits at most 50 MiB
+of raw source bytes across running and queued jobs. The package remains an
+in-memory batch foundation rather than a streaming parser.
 
 ## Atomic output publication
 
@@ -106,6 +113,23 @@ after the destination becomes visible raise a dedicated committed-publication
 exception, so callers are not told that an already visible output was rolled back.
 
 ## Installation
+
+### Self-contained Linux release candidates
+
+The Linux packaging workflow builds self-contained `.deb`, `.rpm`, AppImage,
+and `.tar.gz` candidates with SHA-256 checksums and CycloneDX SBOMs. They remove
+the need to create a Python environment or install web dependencies manually.
+The first desktop launch guides the operator through creating a private local
+workspace and password; no default credential is shipped. These alpha bundles
+contain the authenticated web workspace and rules baseline, but no model,
+tokenizer, dataset, Transformers, or PyTorch runtime.
+
+See [Linux packages](docs/linux-packages.md) for compatibility, graphical
+installation, first launch, server-service activation, and verification. A
+successful packaging workflow produces release candidates; it does not itself
+publish a GitHub release.
+
+### Python installation
 
 Python 3.12 or newer is required. The core has no third-party runtime
 dependencies. Model and UI dependencies are optional.
@@ -165,7 +189,8 @@ The standard CLI web command uses localized model names and explanations while
 preserving stable profile IDs in API requests and stored job metadata. Enabling
 a profile does not make it the initial selection or load its artifact at
 startup.
-`--queue-capacity` bounds admitted work, including the running job, and
+`--queue-capacity` bounds admitted work, including the running job,
+`--queue-byte-capacity` bounds the total raw bytes held by those jobs, and
 `--worker-batch-size` controls cancellation/progress checkpoints.
 Failed logins are throttled in-process by both account and direct client source;
 the defaults allow five account failures and twenty source failures per
@@ -257,7 +282,10 @@ See [model selection](docs/model-selection.md) for the rationale and
 [synthetic evaluation results](docs/results/2026-08-07-synthetic-evaluation.md)
 for the first honest, deliberately small measurement. The separate
 [local web security validation](docs/results/2026-08-07-web-security-validation.md)
-records the current authentication, upload, packaging, and privacy checks.
+records the current authentication, upload, and privacy checks.
+The [Linux packaging validation](docs/results/2026-08-07-linux-packaging-validation.md)
+separates locally completed bundle and DEB checks from the still-required
+native AppImage and RPM CI gate.
 The [multilingual smoke baseline](docs/results/2026-08-07-multilingual-smoke-baseline.md)
 records the rules adapter's limitations on the balanced development fixture.
 The [multilingual model evaluation](docs/results/2026-08-07-multilingual-model-evaluation.md)
@@ -273,7 +301,8 @@ The suite covers strict parsing, aggregate validation errors, predictor count
 mismatches, exceptions in later chunks, symlink and path aliases, overwrite
 behavior, resource-limit boundaries, Unicode JSONL separators, bounded predictor
 output, atomic cleanup, post-publication durability errors, workspace RBAC,
-pre-session and session-bound CSRF, bounded uploads, security headers, and
+pre-session and session-bound CSRF, bounded multi-format uploads, aggregate
+queue-byte admission, security headers, and
 privacy-minimal web exports. Manifest tests cover tampering, missing and added
 files, path traversal, symbolic links, strict JSON, bounds, and re-verification
 before model loading. Web integration tests require `.[web,test]`.
@@ -314,8 +343,8 @@ before model loading. Web integration tests require `.[web,test]`.
 - Workspace database permissions and SQLite secure deletion do not provide
   encryption at rest or guarantee erasure from backups, snapshots, SSDs, or
   copy-on-write storage.
-- Input is read and validated in memory. Resource limits are opt-in and no
-  default operational profile is claimed.
+- Input is read and validated in memory. The bundled applications use a
+  conservative alpha limit profile, but it is not a production capacity claim.
 - Atomicity and durability behavior is designed for local POSIX-like
   filesystems and is not claimed for every network filesystem or operating
   system.
@@ -343,5 +372,5 @@ before model loading. Web integration tests require `.[web,test]`.
    any non-loopback API or web exposure; the current limiter is process-local.
 8. Add bounded syslog ingestion with backpressure, source authentication, and a
    separate retention policy; keep it disabled by default.
-9. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
-   the foundation scope.
+9. Validate core, web, and Linux packaging CI, then prepare the planned
+   v0.1.0-alpha.1 release without changing the foundation scope.

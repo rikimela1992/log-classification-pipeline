@@ -11,7 +11,7 @@ from typing import Any, Callable, Protocol
 
 from .atomic import atomic_write_jsonl
 from .contracts import PredictionContractError, validate_prediction_record
-from .jsonl import read_jsonl
+from .inputs import read_input_file
 
 
 class Predictor(Protocol):
@@ -54,6 +54,7 @@ def process_batch(
     overwrite: bool = False,
     max_input_bytes: int | None = None,
     max_records: int | None = None,
+    input_format: str | None = None,
     output_mode: int = 0o600,
     progress_callback: Callable[[int, int], None] | None = None,
     should_cancel: Callable[[], bool] | None = None,
@@ -72,8 +73,9 @@ def process_batch(
     if destination.exists() and not overwrite:
         raise FileExistsError(f"output already exists: {destination}")
 
-    parsed = read_jsonl(
+    parsed = read_input_file(
         source,
+        input_format=input_format,
         max_input_bytes=max_input_bytes,
         max_records=max_records,
     )

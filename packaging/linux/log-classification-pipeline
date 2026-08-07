@@ -1,0 +1,36 @@
+#!/bin/sh
+set -eu
+
+umask 077
+script_directory=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+engine="$script_directory/../lib/log-classification-pipeline/log-classify"
+
+if [ ! -x "$engine" ]; then
+    printf '%s\n' "The packaged log-classify engine was not found." >&2
+    exit 1
+fi
+
+state_root=${LCP_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/log-classification-pipeline}
+database=${LCP_DATABASE:-$state_root/workspace.sqlite3}
+mkdir -p -- "$state_root"
+chmod 700 -- "$state_root"
+
+if [ ! -e "$database" ]; then
+    printf '%s\n' "Log Classification Pipeline — first local setup"
+    printf '%s\n' "No default account will be created. Choose local identifiers below."
+    printf '%s' "Organization: "
+    IFS= read -r organization
+    printf '%s' "Administrator username: "
+    IFS= read -r administrator
+    if [ -z "$organization" ] || [ -z "$administrator" ]; then
+        printf '%s\n' "Organization and administrator must be non-blank." >&2
+        exit 2
+    fi
+    "$engine" workspace init "$database" "$organization" "$administrator"
+fi
+
+if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] && command -v xdg-open >/dev/null 2>&1; then
+    (sleep 2; xdg-open "http://127.0.0.1:8080/app" >/dev/null 2>&1 || true) &
+fi
+
+exec "$engine" web "$database" "$@"

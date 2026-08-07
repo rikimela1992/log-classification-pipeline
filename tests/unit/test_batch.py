@@ -56,6 +56,27 @@ class BatchTests(unittest.TestCase):
             self.assertTrue(summary.batch_id.startswith("sha256:"))
             self.assertEqual(len(destination.read_text(encoding="utf-8").splitlines()), 5)
 
+    def test_text_log_and_csv_inputs_share_the_atomic_pipeline(self) -> None:
+        fixtures = (
+            ("input.txt", "first event\nsecond event\n", 2),
+            ("input.log", "first event\r\n", 1),
+            ("input.csv", 'message,component\n"first event",worker\n', 1),
+        )
+        for filename, content, expected_records in fixtures:
+            with self.subTest(filename=filename):
+                with tempfile.TemporaryDirectory() as raw_directory:
+                    directory = Path(raw_directory)
+                    source = directory / filename
+                    source.write_text(content, encoding="utf-8")
+                    destination = directory / "output.jsonl"
+                    predictor = RecordingPredictor()
+
+                    summary = process_batch(source, destination, predictor)
+
+                    self.assertEqual(summary.input_records, expected_records)
+                    self.assertEqual(summary.output_records, expected_records)
+                    self.assertTrue(destination.exists())
+
     def test_progress_is_monotonic_and_cancellation_discards_staged_output(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             directory = Path(raw_directory)

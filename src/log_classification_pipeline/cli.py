@@ -15,8 +15,13 @@ from typing import Any
 from .adapters import RulesPredictor, ZeroShotConfig, ZeroShotPredictor
 from .application import classify_file_into_workspace
 from .batch import process_batch
+from .defaults import (
+    DEFAULT_MAX_ADMITTED_BYTES,
+    DEFAULT_MAX_INPUT_BYTES,
+    DEFAULT_MAX_RECORDS,
+)
 from .evaluation import evaluate_records
-from .jsonl import read_jsonl
+from .inputs import read_input_file
 from .model_artifact import create_artifact_manifest, verify_artifact_manifest
 from .model_catalog import RULES_MODEL_NAME, registered_model_catalog
 from .model_profiles import (
@@ -27,8 +32,12 @@ from .workspace import RetentionPolicy, Role, Workspace
 
 
 def _add_limits(parser: argparse.ArgumentParser) -> None:
-    parser.add_argument("--max-input-bytes", type=int, default=1_000_000)
-    parser.add_argument("--max-records", type=int, default=1_000)
+    parser.add_argument(
+        "--max-input-bytes",
+        type=int,
+        default=DEFAULT_MAX_INPUT_BYTES,
+    )
+    parser.add_argument("--max-records", type=int, default=DEFAULT_MAX_RECORDS)
 
 
 def _add_adapter(parser: argparse.ArgumentParser) -> None:
@@ -107,7 +116,7 @@ def _add_workspace_commands(subparsers: argparse._SubParsersAction) -> None:
 
     classify = commands.add_parser(
         "classify",
-        help="classify a JSONL file and persist only a complete job",
+        help="classify a supported log file and persist only a complete job",
     )
     _add_workspace_identity(classify)
     classify.add_argument("input", type=Path)
@@ -284,13 +293,16 @@ def _parser() -> argparse.ArgumentParser:
         default=ENGLISH_PROFILE_ID,
     )
 
-    validate = subparsers.add_parser("validate", help="validate input JSONL")
+    validate = subparsers.add_parser(
+        "validate",
+        help="validate a JSONL, NDJSON, TXT, LOG, or CSV input file",
+    )
     validate.add_argument("input", type=Path)
     _add_limits(validate)
 
     classify = subparsers.add_parser(
         "classify",
-        help="classify JSONL into an atomically published output",
+        help="classify a supported log file into an atomically published output",
     )
     classify.add_argument("input", type=Path)
     classify.add_argument("output", type=Path)
@@ -301,7 +313,7 @@ def _parser() -> argparse.ArgumentParser:
 
     evaluate = subparsers.add_parser(
         "evaluate",
-        help="evaluate a labelled synthetic JSONL fixture",
+        help="evaluate a labelled synthetic JSONL, NDJSON, or CSV fixture",
     )
     evaluate.add_argument("input", type=Path)
     _add_limits(evaluate)
@@ -329,6 +341,12 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=8,
         help="maximum admitted web jobs, including the running job",
+    )
+    web.add_argument(
+        "--queue-byte-capacity",
+        type=int,
+        default=DEFAULT_MAX_ADMITTED_BYTES,
+        help="maximum raw bytes admitted across running and queued web jobs",
     )
     web.add_argument(
         "--worker-batch-size",
@@ -535,7 +553,7 @@ def _run(args: argparse.Namespace) -> None:
         return
 
     if args.command == "validate":
-        parsed = read_jsonl(
+        parsed = read_input_file(
             args.input,
             max_input_bytes=args.max_input_bytes,
             max_records=args.max_records,
@@ -609,6 +627,7 @@ def _run(args: argparse.Namespace) -> None:
                 max_records=args.max_records,
                 max_request_bytes=args.max_input_bytes + 262_144,
                 max_admitted_jobs=args.queue_capacity,
+                max_admitted_bytes=args.queue_byte_capacity,
                 worker_batch_size=args.worker_batch_size,
                 login_account_limit=args.login_account_limit,
                 login_source_limit=args.login_source_limit,
@@ -639,7 +658,7 @@ def _run(args: argparse.Namespace) -> None:
         _emit(asdict(summary))
         return
     if args.command == "evaluate":
-        parsed = read_jsonl(
+        parsed = read_input_file(
             args.input,
             max_input_bytes=args.max_input_bytes,
             max_records=args.max_records,
