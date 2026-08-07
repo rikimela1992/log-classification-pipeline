@@ -19,5 +19,22 @@ classifiers = [
 ]
 dependencies = []
 
+[project.optional-dependencies]
+ml = [
+    "sentencepiece>=0.2,<1",
+    "torch>=2.4,<3",
+    "transformers>=4.48,<6",
+]
+ui = ["gradio>=6.0,<7"]
+demo = [
+    "gradio>=6.0,<7",
+    "sentencepiece>=0.2,<1",
+    "torch>=2.4,<3",
+    "transformers>=4.48,<6",
+]
+
+[project.scripts]
+log-classify = "log_classification_pipeline.cli:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]

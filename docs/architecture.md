@@ -2,9 +2,10 @@
 
 ## Scope
 
-The current release candidate is a model-independent boundary for synthetic or
-already-sanitized JSONL batches. It is intentionally limited to parsing,
-validation, orchestration, and output publication.
+The core is a model-independent boundary for synthetic or already-sanitized
+JSONL batches. Optional adapters, a CLI, and a localhost-only UI sit outside the
+core boundary and reuse the same validation, orchestration, and atomic
+publication path.
 
 ![Fail-closed batch pipeline](assets/pipeline-overview.svg)
 
@@ -16,6 +17,10 @@ validation, orchestration, and output publication.
 | contracts.py | Validate stable input fields and predictor output mappings | Return line-specific issues or raise a predictor contract error |
 | batch.py | Validate before prediction, chunk records, consume at most one excess output, enforce one output per input | Stop before publication if input or predictor behavior is invalid |
 | atomic.py | Encode JSONL, apply permissions, sync a temporary file, publish, sync the directory | Attempt pre-publication temporary cleanup; distinguish committed failures |
+| adapters/rules.py | Provide a deterministic wiring baseline for synthetic demos | Abstain when subsystem evidence is absent |
+| adapters/zero_shot.py | Lazy-load a pinned NLI encoder, offline by default | Fail before publication on missing artifacts or invalid model output |
+| application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
+| ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
 
 ## Processing sequence
 
@@ -53,8 +58,18 @@ caller's process and is outside this library's security boundary. Destination
 filesystem semantics are deployment assumptions that must be validated by an
 integrator.
 
+## Model boundary
+
+Model weights, tokenizers, caches, and datasets are external artifacts and must
+not be committed. The default Hub adapter revision is immutable, remote
+downloads are opt-in, remote code is disabled, and `safetensors` is required.
+Local-directory model identity and revision are explicitly declared by the
+caller but are not yet verified against an artifact manifest. The adapter
+returns only versioned classifications and declared model provenance; it does
+not include the input message.
+
 ## Deliberate exclusions
 
-The candidate contains no network service, model adapter, model artifact,
-training code, dataset, production log, deployment manifest, infrastructure
+The candidate contains no bundled model artifact, training code, dataset,
+production log, deployment manifest, remotely exposed service, infrastructure
 identifier, or secret-management integration.

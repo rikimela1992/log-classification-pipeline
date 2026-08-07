@@ -1,0 +1,11 @@
+{"message":"Unauthorized login attempt was denied","expected_subsystem":"auth","expected_severity":"security_event"}
+{"message":"Firewall policy warning requires review","expected_subsystem":"firewall","expected_severity":"warning"}
+{"message":"Worker service started and is ready","expected_subsystem":"compute","expected_severity":"info"}
+{"message":"Media transcode failed during playback","expected_subsystem":"media","expected_severity":"error"}
+{"message":"Network route connected successfully","expected_subsystem":"network","expected_severity":"info"}
+{"message":"Camera recorder became unavailable","expected_subsystem":"nvr-cctv","expected_severity":"error"}
+{"message":"Storage backup completed successfully","expected_subsystem":"storage","expected_severity":"info"}
+{"message":"VPN tunnel is degraded and retrying","expected_subsystem":"vpn","expected_severity":"warning"}
+{"message":"Wireless access point is ready","expected_subsystem":"wifi-ap","expected_severity":"info"}
+{"message":"Model inference completed successfully","expected_subsystem":"ai-ml","expected_severity":"info"}
+{"message":"Worker process heartbeat","expected_subsystem":"compute","expected_severity":"routine"}

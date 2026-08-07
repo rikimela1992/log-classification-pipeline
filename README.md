@@ -9,7 +9,8 @@ The project is available under the [MIT License](LICENSE).
 
 All examples and test records are synthetic. This repository includes no model,
 checkpoint, tokenizer, dataset, production log, or operational configuration.
-A Transformers adapter is not part of this public foundation.
+An optional, offline-first zero-shot adapter is included, but model artifacts
+remain outside the repository.
 
 ## Problem
 
@@ -30,6 +31,8 @@ publishes output only after every result has passed validation.
 - Make post-publication durability failures distinguishable from failures that
   occur before a destination becomes visible.
 - Keep the core independent from any model framework.
+- Make the model adapter and local UI optional, lazy-loaded extras.
+- Emit privacy-minimal classifications without echoing input messages.
 
 ## Architecture
 
@@ -39,6 +42,10 @@ The package is organized into strict JSONL parsing, input/output contracts,
 batch orchestration, and atomic publication helpers. See
 [docs/architecture.md](docs/architecture.md) for component boundaries and
 failure semantics.
+
+![Optional model and interface path](docs/assets/model-evaluation-loop.svg)
+
+The CLI and local UI call the same fail-closed application services.
 
 ## Fail-closed batch contract
 
@@ -82,11 +89,30 @@ exception, so callers are not told that an already visible output was rolled bac
 
 ## Installation
 
-Python 3.12 or newer is required. The current foundation has no third-party
-runtime dependencies.
+Python 3.12 or newer is required. The core has no third-party runtime
+dependencies. Model and UI dependencies are optional.
 
     python3 -m venv .venv
     .venv/bin/python -m pip install --no-deps .
+
+For the local rules-based wiring demo:
+
+    PYTHONPATH=src python3 -m log_classification_pipeline.cli evaluate tests/fixtures/synthetic-evaluation.jsonl
+
+For the local UI:
+
+    .venv/bin/python -m pip install '.[ui]'
+    .venv/bin/log-classify ui
+
+For zero-shot inference:
+
+    .venv/bin/python -m pip install '.[ml]'
+    .venv/bin/log-classify classify input.jsonl output.jsonl --adapter zero-shot \
+      --model-source /path/to/local/model --model-id <declared-model-id> \
+      --model-revision <declared-revision>
+
+Downloads are disabled by default. Pass `--allow-download` only when network
+access and the pinned model provenance are acceptable.
 
 ## Synthetic example
 
@@ -97,6 +123,19 @@ Validate the included synthetic examples without invoking a model:
 
 The first command exits with status 0. The second command reports a validation
 failure and exits non-zero. It does not create output or call a predictor.
+
+## Experimental model adapter
+
+The default experimental encoder is
+[`MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c`](https://huggingface.co/MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c),
+pinned to a full commit revision. It is an NLI encoder used for zero-shot
+classification, not a generative LLM. The public taxonomy has ten subsystem
+labels and five severity labels. Predictions include labels, scores, abstention,
+and model provenance; they do not copy the source message.
+
+See [model selection](docs/model-selection.md) for the rationale and
+[synthetic evaluation results](docs/results/2026-08-07-synthetic-evaluation.md)
+for the first honest, deliberately small measurement.
 
 ## Running tests
 
@@ -122,25 +161,29 @@ output, atomic cleanup, and post-publication durability errors.
 
 ## Current limitations
 
-- There is no Transformers adapter, model loading, training, or inference CLI.
+- The zero-shot adapter is experimental and English-oriented; its scores are not
+  calibrated probabilities.
+- Model artifacts and optional dependencies are not bundled.
+- The UI binds only to localhost and is a demonstration, not an authenticated
+  service.
 - Input is read and validated in memory. Resource limits are opt-in and no
   default operational profile is claimed.
 - Atomicity and durability behavior is designed for local POSIX-like
   filesystems and is not claimed for every network filesystem or operating
   system.
 - The predictor is supplied by the caller and runs in-process without isolation.
-- The input schema is intentionally small and has no explicit schema-version
-  negotiation yet.
+- The classification taxonomy is versioned, but input schema negotiation is not
+  implemented.
 - This project has not completed production hardening, load testing, or an
   independent security review.
 
 ## Roadmap
 
 1. Define measured operational profiles and evaluate conservative default limits.
-2. Define a versioned predictor adapter contract.
-3. Add a Transformers adapter only after artifact provenance and offline
-   reproducibility requirements are documented and tested.
-4. Add end-to-end synthetic equivalence fixtures and performance measurements.
+2. Calibrate abstention and severity labels on a larger, independently authored
+   synthetic evaluation set.
+3. Benchmark the smaller MiniLM fallback and measure warm/cold CPU behavior.
+4. Add an explicit artifact manifest and cache verification workflow.
 5. Review cross-platform publication semantics and document supported
    filesystems.
 6. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
