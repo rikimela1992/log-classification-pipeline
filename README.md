@@ -151,19 +151,32 @@ For zero-shot inference:
 Downloads are disabled by default. Pass `--allow-download` only when network
 access and the pinned model provenance are acceptable.
 
-For multilingual English, Italian, French, and Spanish input, select the larger
-experimental profile explicitly:
+On a compatible CPU-only Linux host, install a CPU build of PyTorch first;
+otherwise the generic resolver may select large accelerator dependencies that
+the host cannot use:
+
+    .venv/bin/python -m pip install --index-url \
+      https://download.pytorch.org/whl/cpu 'torch>=2.4,<3'
+    .venv/bin/python -m pip install '.[ml]'
+
+Confirm the platform-specific command with the official PyTorch installer when
+using another operating system or architecture.
+
+For multilingual English, Italian, French, and Spanish input, select the
+smallest experimental CPU profile explicitly:
 
     .venv/bin/log-classify evaluate \
       tests/fixtures/synthetic-evaluation-multilingual.jsonl \
-      --adapter zero-shot --model-profile multilingual-bge-m3-v1 \
+      --adapter zero-shot --model-profile multilingual-minilm-v1 \
       --allow-download
 
-This can download an approximately 1.14 GB model. Profile resolution, artifact
-loading, and the adapter contract are tested. A controlled 4-vCPU run did not
-finish the 40-record development fixture within five minutes, so this profile
-is not suitable for the synchronous interactive CPU path on the measured host.
-Its classification quality has not yet been measured here.
+The approximately 428 MB weight file completed the 40-record development
+fixture on the measured 4-vCPU host, but the conservative `0.60` threshold
+abstained on every record. At threshold zero its raw top-label accuracy was
+`0.60` for subsystem and `0.30` for severity. It is therefore a capacity-tested
+experiment, not an accuracy-qualified default. The larger
+`multilingual-mdeberta-v1` and `multilingual-bge-m3-v1` profiles remain explicit
+asynchronous/GPU experiments.
 
 ## Synthetic example
 
@@ -183,8 +196,9 @@ pinned to a full commit revision. It is an NLI encoder used for zero-shot
 classification, not a generative LLM. The public taxonomy has ten subsystem
 labels and five severity labels. Predictions include labels, scores,
 abstention, model/profile provenance, and a deterministic configuration digest;
-they do not copy the source message. An opt-in BGE-M3 profile covers the
-intended four-language scope without claiming measured accuracy.
+they do not copy the source message. Three opt-in multilingual profiles cover
+the intended four-language software path at different capacity points without
+claiming deployment-grade accuracy.
 
 See [model selection](docs/model-selection.md) for the rationale and
 [synthetic evaluation results](docs/results/2026-08-07-synthetic-evaluation.md)
@@ -193,6 +207,9 @@ for the first honest, deliberately small measurement. The separate
 records the current authentication, upload, packaging, and privacy checks.
 The [multilingual smoke baseline](docs/results/2026-08-07-multilingual-smoke-baseline.md)
 records the rules adapter's limitations on the balanced development fixture.
+The [multilingual model evaluation](docs/results/2026-08-07-multilingual-model-evaluation.md)
+records the measured MiniLM and mDeBERTa CPU outcomes, including unsuccessful
+capacity results.
 
 ## Running tests
 
@@ -220,9 +237,10 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
 
 ## Current limitations
 
-- Both zero-shot profiles are experimental and their scores are not calibrated
-  probabilities. The multilingual profile loaded successfully but did not
-  complete the 40-record CPU capacity run within five minutes.
+- All zero-shot profiles are experimental and their scores are not calibrated
+  probabilities. The fast multilingual profile has weak measured severity
+  accuracy; the larger profiles are not suitable for synchronous CPU use on
+  the measured host.
 - Model artifacts and optional dependencies are not bundled.
 - The Gradio UI is an unauthenticated localhost demonstration. The separate web
   workspace is authenticated but remains localhost-only and alpha.
@@ -254,15 +272,14 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
 1. Define measured operational profiles and evaluate conservative default limits.
 2. Calibrate abstention and severity labels on a larger, independently authored
    synthetic evaluation set.
-3. Select and benchmark a genuinely multilingual smaller fallback, then measure
-   warm/cold CPU behavior; do not assume the English MiniLM candidate satisfies
-   the four-language requirement.
+3. Calibrate separate subsystem/severity thresholds on a larger development set
+   and validate the selected profile on an independently authored holdout.
 4. Add an explicit artifact manifest and cache verification workflow.
 5. Review cross-platform publication semantics and document supported
    filesystems.
-6. Run the pinned multilingual profile on suitable GPU or asynchronous batch
-   infrastructure, then build a larger independently reviewed holdout before
-   making accuracy claims.
+6. Run the larger pinned multilingual profiles on suitable GPU infrastructure,
+   then build a larger independently reviewed holdout before making accuracy
+   claims.
 7. Add rate limits and a deployment threat model before considering any
    non-loopback API or web exposure.
 8. Add bounded syslog ingestion with backpressure, source authentication, and a

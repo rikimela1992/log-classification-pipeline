@@ -88,8 +88,9 @@ class ZeroShotConfig:
     @classmethod
     def from_profile(cls, profile_id: str, **kwargs) -> ZeroShotConfig:
         profile = get_model_profile(profile_id)
+        model_source = kwargs.pop("model_source", profile.model_id)
         return cls(
-            model_source=profile.model_id,
+            model_source=model_source,
             model_id=profile.model_id,
             revision=profile.model_revision,
             profile_id=profile.profile_id,

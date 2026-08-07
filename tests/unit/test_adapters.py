@@ -6,6 +6,9 @@ from log_classification_pipeline.adapters.rules import RulesPredictor
 from log_classification_pipeline.adapters.zero_shot import ZeroShotConfig, ZeroShotPredictor
 from log_classification_pipeline.contracts import PredictionContractError
 from log_classification_pipeline.model_profiles import (
+    MODEL_PROFILE_IDS,
+    MULTILINGUAL_BALANCED_PROFILE_ID,
+    MULTILINGUAL_FAST_PROFILE_ID,
     MULTILINGUAL_PROFILE_ID,
     get_model_profile,
 )
@@ -112,16 +115,48 @@ class ZeroShotConfigTests(unittest.TestCase):
         profile = get_model_profile(MULTILINGUAL_PROFILE_ID)
         config = ZeroShotConfig.from_profile(
             MULTILINGUAL_PROFILE_ID,
+            model_source="/synthetic/local-model",
             subsystem_threshold=0.7,
             severity_threshold=0.5,
         )
 
         self.assertEqual(config.model_id, profile.model_id)
+        self.assertEqual(config.model_source, "/synthetic/local-model")
         self.assertEqual(config.revision, profile.model_revision)
         self.assertEqual(config.resolved_subsystem_threshold, 0.7)
         self.assertEqual(config.resolved_severity_threshold, 0.5)
         self.assertRegex(config.configuration_digest, r"^sha256:[0-9a-f]{64}$")
         self.assertEqual(config.configuration_digest, config.configuration_digest)
+
+    def test_multilingual_profiles_are_pinned_and_cover_target_languages(self) -> None:
+        fast = get_model_profile(MULTILINGUAL_FAST_PROFILE_ID)
+        balanced = get_model_profile(MULTILINGUAL_BALANCED_PROFILE_ID)
+        config = ZeroShotConfig.from_profile(MULTILINGUAL_BALANCED_PROFILE_ID)
+
+        self.assertEqual(
+            balanced.model_id,
+            "MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
+        )
+        self.assertEqual(
+            fast.model_id,
+            "MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli",
+        )
+        for profile in (fast, balanced):
+            self.assertRegex(profile.model_revision, r"^[0-9a-f]{40}$")
+            self.assertEqual(profile.languages, ("en", "it", "fr", "es"))
+            self.assertEqual(profile.license_spdx, "MIT")
+        self.assertEqual(config.model_id, balanced.model_id)
+        self.assertEqual(config.revision, balanced.model_revision)
+        self.assertIn(MULTILINGUAL_FAST_PROFILE_ID, MODEL_PROFILE_IDS)
+        self.assertIn(MULTILINGUAL_BALANCED_PROFILE_ID, MODEL_PROFILE_IDS)
+        self.assertLess(
+            MODEL_PROFILE_IDS.index(MULTILINGUAL_FAST_PROFILE_ID),
+            MODEL_PROFILE_IDS.index(MULTILINGUAL_BALANCED_PROFILE_ID),
+        )
+        self.assertLess(
+            MODEL_PROFILE_IDS.index(MULTILINGUAL_BALANCED_PROFILE_ID),
+            MODEL_PROFILE_IDS.index(MULTILINGUAL_PROFILE_ID),
+        )
 
 
 class ZeroShotPredictorTests(unittest.TestCase):

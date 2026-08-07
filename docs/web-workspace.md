@@ -35,7 +35,7 @@ and reports progress every 16 records. Both values are explicit CLI controls:
   --queue-capacity 8 --worker-batch-size 16
 ```
 
-The rules baseline is available without model dependencies. To expose the two
+The rules baseline is available without model dependencies. To expose the
 known profiles in the selector, install both extras and enable them. Predictors
 remain lazy and downloads remain disabled by default:
 
@@ -43,6 +43,8 @@ remain lazy and downloads remain disabled by default:
 .venv/bin/python -m pip install '.[web,ml]'
 .venv/bin/log-classify web ./state/workspace.sqlite3 \
   --enable-model-profile english-deberta-v1 \
+  --enable-model-profile multilingual-minilm-v1 \
+  --enable-model-profile multilingual-mdeberta-v1 \
   --enable-model-profile multilingual-bge-m3-v1
 ```
 
@@ -169,8 +171,9 @@ English machine values.
 
 UI language does not select or translate classification input. The rules
 baseline is English-oriented. `english-deberta-v1` is the default experimental
-profile; `multilingual-bge-m3-v1` is an opt-in profile for English, Italian,
-French, and Spanish input. The latter loaded successfully in a controlled CPU
-capacity probe, but did not complete the 40-record development fixture within
-five minutes. It therefore remains a GPU or asynchronous quality-first
-experiment and makes no model-quality claim.
+profile. The opt-in `multilingual-minilm-v1`,
+`multilingual-mdeberta-v1`, and `multilingual-bge-m3-v1` profiles cover the
+English, Italian, French, and Spanish software path at increasing resource
+cost. Only MiniLM completed the current CPU fixture, and its measured quality
+is not sufficient to make it a default. UI locale and model language are
+independent choices.
