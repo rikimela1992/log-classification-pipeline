@@ -18,12 +18,22 @@
   <form action="/app/classify" method="post" enctype="multipart/form-data" class="upload-grid" data-secure-form>
     <label>{{ t("classify.file") }}<input name="upload" type="file" accept=".jsonl,application/x-ndjson,application/json" required></label>
     <label>{{ t("classify.model") }}
-      <select name="model">
-        {% for model in models %}<option value="{{ model }}">{{ model }}</option>{% endfor %}
+      <select name="model" aria-describedby="model-help">
+        {% for model in models %}<option value="{{ model.id }}">{{ t(model.label_key) if model.label_key else model.id }}</option>{% endfor %}
       </select>
     </label>
     <button class="button primary" type="submit">{{ t("classify.submit") }}</button>
   </form>
+  <p id="model-help" class="muted model-note">{{ t("classify.model_help") }}</p>
+  <ul class="model-guide">
+    {% for model in models %}
+    <li>
+      <strong>{{ t(model.label_key) if model.label_key else model.id }}</strong>
+      <code>{{ model.id }}</code>
+      <span>{{ t(model.description_key) if model.description_key else t("model.custom.description") }}</span>
+    </li>
+    {% endfor %}
+  </ul>
 </section>
 {% endif %}
 

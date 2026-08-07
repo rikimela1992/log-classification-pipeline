@@ -5,6 +5,10 @@ import unittest
 from log_classification_pipeline.adapters.rules import RulesPredictor
 from log_classification_pipeline.adapters.zero_shot import ZeroShotConfig, ZeroShotPredictor
 from log_classification_pipeline.contracts import PredictionContractError
+from log_classification_pipeline.model_catalog import (
+    configured_model_catalog,
+    registered_model_catalog,
+)
 from log_classification_pipeline.model_profiles import (
     MODEL_PROFILE_IDS,
     MULTILINGUAL_BALANCED_PROFILE_ID,
@@ -84,6 +88,78 @@ class RulesPredictorTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     RulesPredictor(confidence_threshold=value)
         self.assertEqual(RulesPredictor()([]), [])
+
+
+class ModelCatalogTests(unittest.TestCase):
+    def test_catalog_is_safe_ordered_public_metadata(self) -> None:
+        catalog = registered_model_catalog(
+            (
+                "custom-synthetic",
+                MULTILINGUAL_PROFILE_ID,
+                "rules",
+                MULTILINGUAL_FAST_PROFILE_ID,
+            )
+        )
+
+        self.assertEqual(
+            [item["id"] for item in catalog],
+            [
+                "rules",
+                MULTILINGUAL_FAST_PROFILE_ID,
+                MULTILINGUAL_PROFILE_ID,
+                "custom-synthetic",
+            ],
+        )
+        self.assertEqual(catalog[0]["quality_status"], "wiring-baseline")
+        self.assertTrue(catalog[0]["artifact_bundled"])
+        self.assertEqual(catalog[1]["languages"], ["en", "it", "fr", "es"])
+        self.assertEqual(catalog[1]["execution_tier"], "cpu-fast")
+        self.assertFalse(catalog[1]["artifact_bundled"])
+        self.assertEqual(catalog[-1]["quality_status"], "unknown")
+        self.assertIsNone(catalog[-1]["model_id"])
+
+    def test_catalog_rejects_invalid_names_and_deduplicates(self) -> None:
+        self.assertEqual(
+            [item["id"] for item in registered_model_catalog(("rules", "rules"))],
+            ["rules"],
+        )
+        for names in (("",), (" ",), (None,)):
+            with self.subTest(names=names):
+                with self.assertRaises(ValueError):
+                    registered_model_catalog(names)
+
+    def test_configured_catalog_reserves_trusted_model_names(self) -> None:
+        class ArbitraryPredictor:
+            def __call__(self, records):
+                return list(records)
+
+        class DifferentRules(RulesPredictor):
+            model_id = "different-rules"
+            revision = "99"
+
+        class DifferentZeroShot(ZeroShotPredictor):
+            pass
+
+        with self.assertRaisesRegex(ValueError, "canonical rules identity"):
+            configured_model_catalog({"rules": ArbitraryPredictor()})
+        with self.assertRaisesRegex(ValueError, "canonical rules identity"):
+            configured_model_catalog({"rules": DifferentRules()})
+        with self.assertRaisesRegex(ValueError, "matching zero-shot predictor"):
+            configured_model_catalog(
+                {MULTILINGUAL_PROFILE_ID: RulesPredictor()}
+            )
+        with self.assertRaisesRegex(ValueError, "matching zero-shot predictor"):
+            configured_model_catalog(
+                {
+                    MULTILINGUAL_PROFILE_ID: DifferentZeroShot(
+                        ZeroShotConfig.from_profile(MULTILINGUAL_PROFILE_ID)
+                    )
+                }
+            )
+        self.assertEqual(
+            configured_model_catalog({"rules": RulesPredictor()})[0]["adapter"],
+            "rules",
+        )
 
 
 class ZeroShotConfigTests(unittest.TestCase):

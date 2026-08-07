@@ -45,6 +45,8 @@ from ..workspace import (
     WorkspaceError,
 )
 from ..jsonl import ParsedBatch, read_jsonl
+from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
+from ..model_profiles import MODEL_PROFILES
 from .i18n import SUPPORTED_LOCALES, load_catalogs, negotiate_locale, translator
 from .worker import (
     LocalClassificationQueue,
@@ -489,11 +491,11 @@ def create_app(
         raise ValueError("at least one predictor must be configured")
     if any(not isinstance(name, str) or not name.strip() for name in predictors):
         raise ValueError("predictor names must be non-blank strings")
-
+    model_registry = dict(predictors)
     workspace = Workspace(settings.database_path)
     workspace.initialize(create=False)
     workspace.verify()
-    model_registry = dict(predictors)
+    model_catalog = configured_model_catalog(model_registry)
     job_queue = LocalClassificationQueue(
         workspace,
         model_registry,
@@ -521,6 +523,7 @@ def create_app(
     )
     app.state.workspace = workspace
     app.state.predictors = model_registry
+    app.state.model_catalog = model_catalog
     app.state.job_queue = job_queue
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.max_request_bytes)
     app.add_middleware(AuthenticationPreflightMiddleware, workspace=workspace)
@@ -794,6 +797,14 @@ def create_app(
             "username": principal.username,
         }
 
+    @app.get("/api/v1/models")
+    def models(token: str = Security(api_token)) -> dict[str, Any]:
+        workspace.principal(token)
+        return {
+            "default_model": model_catalog[0]["id"],
+            "items": model_catalog,
+        }
+
     @app.get("/api/v1/jobs")
     def jobs(
         limit: int = 50,
@@ -952,6 +963,19 @@ def create_app(
             offset=job_offset,
         )
         jobs = job_page[:job_limit]
+        model_options = []
+        for item in model_catalog:
+            model_name = item["id"]
+            known = model_name == RULES_MODEL_NAME or model_name in MODEL_PROFILES
+            model_options.append(
+                {
+                    **item,
+                    "description_key": (
+                        f"model.{model_name}.description" if known else None
+                    ),
+                    "label_key": f"model.{model_name}.label" if known else None,
+                }
+            )
         context: dict[str, Any] = {
             "audit": [],
             "csrf": workspace.csrf_token(token),
@@ -962,7 +986,7 @@ def create_app(
             "job_previous_offset": max(0, job_offset - job_limit),
             "job_offset": job_offset,
             "jobs": jobs,
-            "models": sorted(model_registry),
+            "models": model_options,
             "policy": None,
             "principal": principal,
             "users": [],

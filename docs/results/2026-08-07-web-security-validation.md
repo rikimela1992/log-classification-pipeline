@@ -11,8 +11,8 @@ workflow, **not** a production security assessment or penetration test.
 
 | Check | Result |
 | --- | --- |
-| Complete suite with `web` and `test` extras | 129 tests passed |
-| Core-only environment | 106 tests passed; 23 web tests intentionally skipped |
+| Complete suite with `web` and `test` extras | 135 tests passed |
+| Core-only environment | 111 tests passed; 24 web tests intentionally skipped |
 | Python/TOML parsing | passed |
 | `git diff --check` | passed |
 | Local wheel build | passed |
@@ -33,6 +33,8 @@ The web integration cases cover:
 - validated English, Italian, French, and Spanish catalogs, bounded language
   negotiation, protected locale cookies, and unchanged API machine codes;
 - lazy model-profile registration without artifact loading at web startup;
+- authenticated model-catalog discovery, registered-profile provenance checks,
+  localized descriptions, and deterministic `rules` safe-default ordering;
 - bounded asynchronous admission, immediate `202`, persistent job states,
   monotonic chunk progress, cooperative cancellation, and terminal-only result
   publication;

@@ -33,6 +33,25 @@ class WorkspaceCliTests(unittest.TestCase):
             status = main(arguments)
         return status, stdout.getvalue(), stderr.getvalue()
 
+    def test_models_catalog_is_available_without_loading_artifacts(self) -> None:
+        status, output, errors = self.run_cli(["models"], [])
+
+        self.assertEqual(status, 0, errors)
+        catalog = json.loads(output)
+        self.assertEqual(catalog["default_model"], "rules")
+        self.assertEqual(catalog["items"][0]["id"], "rules")
+        self.assertEqual(
+            [item["id"] for item in catalog["items"]],
+            [
+                "rules",
+                "english-deberta-v1",
+                "multilingual-minilm-v1",
+                "multilingual-mdeberta-v1",
+                "multilingual-bge-m3-v1",
+            ],
+        )
+        self.assertTrue(all(item["experimental"] for item in catalog["items"]))
+
     def test_initialize_classify_list_show_and_policy_flow(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)

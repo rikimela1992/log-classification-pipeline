@@ -92,6 +92,17 @@ to confirm the correct command for other platforms.
 
 ## Selecting a profile
 
+List the registered profiles without importing Transformers or loading an
+artifact:
+
+```console
+log-classify models
+```
+
+The machine-readable catalog reports `rules` first as the safe default. Its
+`execution_tier` values are intended operating roles rather than performance
+guarantees; every zero-shot item remains `quality_status: unqualified`.
+
 Known profiles can be resolved from the Hub only with explicit permission:
 
 ```console

@@ -16,6 +16,7 @@ from .application import classify_file_into_workspace
 from .batch import process_batch
 from .evaluation import evaluate_records
 from .jsonl import read_jsonl
+from .model_catalog import RULES_MODEL_NAME, registered_model_catalog
 from .model_profiles import (
     ENGLISH_PROFILE_ID,
     MODEL_PROFILE_IDS,
@@ -208,6 +209,11 @@ def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="log-classify")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    subparsers.add_parser(
+        "models",
+        help="list model profiles without loading model artifacts",
+    )
+
     validate = subparsers.add_parser("validate", help="validate input JSONL")
     validate.add_argument("input", type=Path)
     _add_limits(validate)
@@ -361,6 +367,17 @@ def _run_workspace(args: argparse.Namespace) -> None:
 
 
 def _run(args: argparse.Namespace) -> None:
+    if args.command == "models":
+        _emit(
+            {
+                "default_model": RULES_MODEL_NAME,
+                "items": registered_model_catalog(
+                    (RULES_MODEL_NAME, *MODEL_PROFILE_IDS)
+                ),
+            }
+        )
+        return
+
     if args.command == "validate":
         parsed = read_jsonl(
             args.input,

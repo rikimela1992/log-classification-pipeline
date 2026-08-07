@@ -53,6 +53,16 @@ but directory contents are not verified until artifact-manifest verification
 is implemented. Model weights, caches, tokenizers, logs, and datasets must
 remain outside this repository.
 
+The standard CLI-configured browser always lists `rules` first as the safe
+initial choice, even when one or more zero-shot profiles are enabled. Localized
+labels explain their intended resource tier and limitations; requests and
+stored jobs continue to use stable machine IDs. Embeddings that call
+`create_app` directly may omit `rules`; a deterministic custom predictor becomes
+the explicit default and receives only unknown/custom metadata. The names
+`rules` and the registered zero-shot profile IDs are reserved and require a
+matching predictor implementation. `log-classify models` exposes the complete
+registered catalog without loading an artifact.
+
 ## Roles and data exposure
 
 | Operation | Admin | Analyst | Viewer |
@@ -92,6 +102,7 @@ available only after terminal success.
 | `POST /api/v1/sessions` | Create an eight-hour opaque session |
 | `DELETE /api/v1/session` | Revoke the current bearer session |
 | `GET /api/v1/me` | Inspect the current principal |
+| `GET /api/v1/models` | List configured model metadata without loading artifacts |
 | `POST /api/v1/classifications` | Validate and queue a bounded JSON `records` array |
 | `POST /api/v1/classifications/file` | Validate and queue a bounded multipart JSONL upload |
 | `GET /api/v1/jobs?limit=50&offset=0` | List recent jobs with `next_offset` |
@@ -100,6 +111,11 @@ available only after terminal success.
 | `POST /api/v1/jobs/{id}/cancel` | Cancel queued work or request a chunk-boundary cancellation |
 | `GET /api/v1/jobs/{id}/export` | Export available results as NDJSON |
 | `/api/v1/admin/*` | Admin-only users, retention, purge, and audit operations |
+
+`GET /api/v1/models` is available to every authenticated role. It returns only
+public configuration metadata: adapter type, stable model/profile revisions,
+languages, license identifier, artifact policy, intended execution tier, and
+quality status. It never triggers a download or predictor construction.
 
 Expired or purged jobs are not visible and return the same `404` as an unknown
 or cross-organization identifier. A known job without completed results cannot

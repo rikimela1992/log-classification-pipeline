@@ -111,6 +111,14 @@ For the local rules-based wiring demo:
 
     PYTHONPATH=src python3 -m log_classification_pipeline.cli evaluate tests/fixtures/synthetic-evaluation.jsonl
 
+Inspect every registered choice without loading or downloading a model:
+
+    .venv/bin/log-classify models
+
+The catalog keeps `rules` as the safe initial choice and reports languages,
+artifact policy, execution tier, immutable model revision, and quality status
+for each experimental profile.
+
 For the local UI:
 
     .venv/bin/python -m pip install '.[ui]'
@@ -137,6 +145,10 @@ an alpha local workflow, not an Internet-facing deployment. See the
 [web workspace guide](docs/web-workspace.md) for roles, API behavior, and
 security boundaries. The browser interface can be switched between English,
 Italian, French, and Spanish; API and export field names remain stable.
+The standard CLI web command uses localized model names and explanations while
+preserving stable profile IDs in API requests and stored job metadata. Enabling
+a profile does not make it the initial selection or load its artifact at
+startup.
 `--queue-capacity` bounds admitted work, including the running job, and
 `--worker-batch-size` controls cancellation/progress checkpoints.
 

@@ -46,16 +46,6 @@ from log_classification_pipeline.workspace import Role, Workspace
 PASSWORD = "correct-horse-battery-staple"
 
 
-class TrackingPredictor:
-    def __init__(self) -> None:
-        self.calls = 0
-        self.delegate = RulesPredictor()
-
-    def __call__(self, records):
-        self.calls += 1
-        return self.delegate(records)
-
-
 class MarkupPredictor:
     def __call__(self, records):
         predictions = RulesPredictor()(records)
@@ -105,7 +95,14 @@ class WebApplicationTests(unittest.TestCase):
             Role.VIEWER,
         )
         self.workspace.logout(admin_token)
-        self.predictor = TrackingPredictor()
+        self.predictor = RulesPredictor()
+        self.rules_call_patch = mock.patch.object(
+            RulesPredictor,
+            "__call__",
+            autospec=True,
+            side_effect=RulesPredictor.__call__,
+        )
+        self.rules_call_mock = self.rules_call_patch.start()
         self.app = create_app(
             WebSettings(
                 self.database,
@@ -125,6 +122,7 @@ class WebApplicationTests(unittest.TestCase):
 
     def tearDown(self) -> None:
         self.client.__exit__(None, None, None)
+        self.rules_call_patch.stop()
         self.temporary_directory.cleanup()
 
     def wait_for_job(self, job_id: str, token: str) -> dict[str, object]:
@@ -211,6 +209,17 @@ class WebApplicationTests(unittest.TestCase):
                 {"rules": RulesPredictor()},
             )
         self.assertFalse(missing_parent.exists())
+
+        with self.assertRaisesRegex(ValueError, "matching zero-shot predictor"):
+            create_app(
+                WebSettings(self.database, allowed_hosts=("testserver",)),
+                {MULTILINGUAL_PROFILE_ID: RulesPredictor()},
+            )
+        with self.assertRaisesRegex(ValueError, "canonical rules identity"):
+            create_app(
+                WebSettings(self.database, allowed_hosts=("testserver",)),
+                {"rules": ExplodingPredictor()},
+            )
 
     def test_catalogs_negotiate_language_and_fallback_without_api_drift(self) -> None:
         catalogs = load_catalogs()
@@ -309,6 +318,30 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(denied.json()["code"], "not_authenticated")
 
+    def test_model_catalog_is_authenticated_lazy_and_safe_ordered(self) -> None:
+        unauthenticated = self.client.get("/api/v1/models")
+        self.assertEqual(unauthenticated.status_code, 401)
+
+        viewer_token = self.api_login("reviewer", "viewer-password-value")
+        response = self.client.get(
+            "/api/v1/models",
+            headers=self.bearer(viewer_token),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json()["default_model"], "rules")
+        self.assertEqual(response.json()["items"][0]["id"], "rules")
+        self.assertEqual(response.json()["items"][0]["languages"], ["en"])
+        self.assertEqual(self.rules_call_mock.call_count, 0)
+
+        self.ui_login()
+        page = self.client.get("/app", headers={"Accept-Language": "it"})
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertIn(
+            '<option value="rules">Baseline a regole — scelta sicura</option>',
+            page.text,
+        )
+        self.assertIn("non carica artefatti", page.text)
+
     def test_viewer_is_denied_before_predictor_and_analyst_can_classify(self) -> None:
         viewer_token = self.api_login("reviewer", "viewer-password-value")
         denied = self.client.post(
@@ -317,7 +350,7 @@ class WebApplicationTests(unittest.TestCase):
             json={"records": [{"message": "Authentication failed"}]},
         )
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(self.predictor.calls, 0)
+        self.assertEqual(self.rules_call_mock.call_count, 0)
 
         analyst_token = self.api_login("analyst", "analyst-password-value")
         created = self.client.post(
@@ -329,7 +362,7 @@ class WebApplicationTests(unittest.TestCase):
         job_id = created.json()["job_id"]
         self.assertEqual(created.headers["location"], created.json()["job_url"])
         self.assertEqual(self.wait_for_job(job_id, analyst_token)["status"], "succeeded")
-        self.assertEqual(self.predictor.calls, 1)
+        self.assertEqual(self.rules_call_mock.call_count, 1)
 
         stored = self.client.get(
             f"/api/v1/jobs/{job_id}",
@@ -688,6 +721,7 @@ class WebApplicationTests(unittest.TestCase):
         )
         self.assertIn("/api/v1/jobs/{job_id}/status", paths)
         self.assertIn("/api/v1/jobs/{job_id}/cancel", paths)
+        self.assertIn("/api/v1/models", paths)
         self.assertTrue(all(not path.startswith("/app") for path in paths))
 
     def test_database_failure_during_authentication_returns_sanitized_503(self) -> None:
@@ -765,7 +799,7 @@ class WebApplicationTests(unittest.TestCase):
             files={"upload": ("input.jsonl", b'{"message":"Backup completed"}\n')},
         )
         self.assertEqual(missing_csrf.status_code, 403)
-        calls_before = self.predictor.calls
+        calls_before = self.rules_call_mock.call_count
 
         created = self.client.post(
             "/app/classify",
@@ -776,7 +810,7 @@ class WebApplicationTests(unittest.TestCase):
         )
         self.assertEqual(created.status_code, 303, created.text)
         self.assertTrue(self.app.state.job_queue.wait_until_idle(5.0))
-        self.assertEqual(self.predictor.calls, calls_before + 1)
+        self.assertEqual(self.rules_call_mock.call_count, calls_before + 1)
         detail = self.client.get(created.headers["location"])
         self.assertEqual(detail.status_code, 200)
         self.assertIn("Classification job", detail.text)
@@ -798,14 +832,14 @@ class WebApplicationTests(unittest.TestCase):
         queued_id = self.workspace.create_job(admin_token, "4" * 64, 1)
         self.workspace.logout(admin_token)
         self.ui_login("reviewer", "viewer-password-value")
-        calls_before = self.predictor.calls
+        calls_before = self.rules_call_mock.call_count
         denied = self.client.post(
             "/app/classify",
             headers=self.csrf_header(),
             files={"upload": ("input.jsonl", b"not even json")},
         )
         self.assertEqual(denied.status_code, 403)
-        self.assertEqual(self.predictor.calls, calls_before)
+        self.assertEqual(self.rules_call_mock.call_count, calls_before)
 
         cancel_denied = self.client.post(
             f"/app/jobs/{queued_id}/cancel",
@@ -1068,6 +1102,10 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(
             set(configured_app.state.predictors),
             {"rules", MULTILINGUAL_PROFILE_ID},
+        )
+        self.assertEqual(
+            [item["id"] for item in configured_app.state.model_catalog],
+            ["rules", MULTILINGUAL_PROFILE_ID],
         )
         configured = configured_app.state.predictors[MULTILINGUAL_PROFILE_ID]
         self.assertIsInstance(configured, ZeroShotPredictor)

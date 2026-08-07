@@ -25,6 +25,7 @@ class ModelProfile:
     model_revision: str
     languages: tuple[str, ...]
     license_spdx: str
+    execution_tier: str
     subsystem_candidates: tuple[tuple[str, str], ...]
     severity_candidates: tuple[tuple[str, str], ...]
     subsystem_hypothesis: str
@@ -64,6 +65,7 @@ _PROFILES = {
         model_id="MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c",
         model_revision="bddf8c5411c34ac3565e16e04384fd68b2618dda",
         languages=("en",),
+        execution_tier="cpu-standard",
         **_COMMON_PROFILE,
     ),
     MULTILINGUAL_FAST_PROFILE_ID: ModelProfile(
@@ -71,6 +73,7 @@ _PROFILES = {
         model_id="MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli",
         model_revision="0a71e92a985b6e1ad1828cf67ce9c459639c1dca",
         languages=("en", "it", "fr", "es"),
+        execution_tier="cpu-fast",
         **_COMMON_PROFILE,
     ),
     MULTILINGUAL_BALANCED_PROFILE_ID: ModelProfile(
@@ -78,6 +81,7 @@ _PROFILES = {
         model_id="MoritzLaurer/mDeBERTa-v3-base-xnli-multilingual-nli-2mil7",
         model_revision="b5113eb38ab63efdd7f280f8c144ea8b13f978ce",
         languages=("en", "it", "fr", "es"),
+        execution_tier="cpu-asynchronous",
         **_COMMON_PROFILE,
     ),
     MULTILINGUAL_PROFILE_ID: ModelProfile(
@@ -85,6 +89,7 @@ _PROFILES = {
         model_id="MoritzLaurer/bge-m3-zeroshot-v2.0-c",
         model_revision="705510dfe0f35d223a4bf6f5d2695ec5fd162341",
         languages=("en", "it", "fr", "es"),
+        execution_tier="gpu-preferred",
         **_COMMON_PROFILE,
     ),
 }

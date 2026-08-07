@@ -41,6 +41,11 @@ input:focus, select:focus { outline: 3px solid rgba(33,85,205,.16); border-color
 .secondary { border: 1px solid #98a2b3; background: white; color: #344054; }
 .danger { margin-top: 18px; background: var(--danger); color: white; }
 .upload-grid { display: grid; grid-template-columns: 2fr 1fr auto; gap: 14px; align-items: end; }
+.model-note { margin: 16px 0 8px; }
+.model-guide { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.model-guide li { display: grid; grid-template-columns: minmax(190px, 1fr) minmax(220px, 1.2fr) 2fr; gap: 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 9px; }
+.model-guide code { overflow-wrap: anywhere; color: var(--muted); }
+.model-guide span { color: var(--muted); }
 .role-badge, .status { display: inline-flex; padding: 5px 10px; border-radius: 99px; background: #eaf0ff; color: #193b8c; font-weight: 750; }
 .status-running { background: #e0f2fe; color: #075985; }
 .status-cancelling { background: #fff1c2; color: #684b00; }
@@ -68,7 +73,7 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .result-card small { color: var(--muted); }
 .abstained { align-self: center; color: #b54708; font-weight: 800; }
 @media (max-width: 760px) {
-  .upload-grid, .two-column, .metrics, .result-card { grid-template-columns: 1fr; }
+  .upload-grid, .model-guide li, .two-column, .metrics, .result-card { grid-template-columns: 1fr; }
   .hero, .section-heading { align-items: flex-start; flex-direction: column; }
   .identity > span { display: none; }
 }
