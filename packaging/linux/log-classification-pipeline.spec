@@ -1,3 +1,5 @@
+%global debug_package %{nil}
+
 Name:           log-classification-pipeline
 Version:        0.1.0
 Release:        0.alpha.1%{?dist}

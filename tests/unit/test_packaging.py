@@ -66,6 +66,11 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertIn("%{LICENSE}", native_licenses)
         self.assertIn("cannot locate RPM license evidence", native_licenses)
 
+        rpm_spec = (
+            ROOT / "packaging/linux/log-classification-pipeline.spec"
+        ).read_text(encoding="utf-8")
+        self.assertIn("%global debug_package %{nil}", rpm_spec)
+
     def test_appstream_identity_filename_and_homepage_are_consistent(self) -> None:
         metadata = ElementTree.parse(
             ROOT
