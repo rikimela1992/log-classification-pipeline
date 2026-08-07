@@ -111,6 +111,27 @@ def validate_classification_prediction(
             raise PredictionContractError(
                 f"prediction {output_index} model config_sha256 is invalid"
             )
+    if "artifact_sha256" in model:
+        if not present_provenance:
+            raise PredictionContractError(
+                f"prediction {output_index} model artifact provenance requires a profile"
+            )
+        artifact_digest = model.get("artifact_sha256")
+        hexadecimal = (
+            artifact_digest.removeprefix("sha256:")
+            if isinstance(artifact_digest, str)
+            else ""
+        )
+        if (
+            not isinstance(artifact_digest, str)
+            or len(artifact_digest) != 71
+            or not artifact_digest.startswith("sha256:")
+            or any(character not in "0123456789abcdef" for character in hexadecimal)
+        ):
+            raise PredictionContractError(
+                f"prediction {output_index} model artifact_sha256 is invalid"
+            )
+        optional_model_fields["artifact_sha256"] = artifact_digest
 
     return {
         "schema_version": TAXONOMY_VERSION,

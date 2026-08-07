@@ -49,9 +49,13 @@ remain lazy and downloads remain disabled by default:
 ```
 
 Local model identity and revision must match the selected registered profile,
-but directory contents are not verified until artifact-manifest verification
-is implemented. Model weights, caches, tokenizers, logs, and datasets must
-remain outside this repository.
+and local directory contents require an external SHA-256 manifest. The CLI
+verifies the manifest before constructing the lazy predictor and the adapter
+copies and re-verifies a private snapshot before loading it. The configured
+model catalog exposes whether an
+artifact is verified and its tree digest without loading it. A locally generated
+manifest detects drift but is not a publisher signature. Model weights, caches,
+tokenizers, logs, and datasets must remain outside this repository.
 
 The standard CLI-configured browser always lists `rules` first as the safe
 initial choice, even when one or more zero-shot profiles are enabled. Localized
@@ -114,8 +118,9 @@ available only after terminal success.
 
 `GET /api/v1/models` is available to every authenticated role. It returns only
 public configuration metadata: adapter type, stable model/profile revisions,
-languages, license identifier, artifact policy, intended execution tier, and
-quality status. It never triggers a download or predictor construction.
+languages, license identifier, artifact policy and verified digest when
+available, intended execution tier, and quality status. It never triggers a
+download or predictor construction.
 
 Expired or purged jobs are not visible and return the same `404` as an unknown
 or cross-organization identifier. A known job without completed results cannot

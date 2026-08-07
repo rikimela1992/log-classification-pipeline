@@ -16,6 +16,7 @@ from .application import classify_file_into_workspace
 from .batch import process_batch
 from .evaluation import evaluate_records
 from .jsonl import read_jsonl
+from .model_artifact import create_artifact_manifest, verify_artifact_manifest
 from .model_catalog import RULES_MODEL_NAME, registered_model_catalog
 from .model_profiles import (
     ENGLISH_PROFILE_ID,
@@ -53,6 +54,11 @@ def _add_adapter(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--model-revision",
         help="declared revision for a local model directory",
+    )
+    parser.add_argument(
+        "--model-manifest",
+        type=Path,
+        help="SHA-256 manifest for a local model directory",
     )
     parser.add_argument(
         "--allow-download",
@@ -151,6 +157,7 @@ def _build_predictor(args: argparse.Namespace):
             or args.model_source
             or args.model_id
             or args.model_revision
+            or args.model_manifest
             or args.allow_download
             or args.subsystem_threshold is not None
             or args.severity_threshold is not None
@@ -177,20 +184,32 @@ def _build_predictor(args: argparse.Namespace):
             raise ValueError(
                 "local model identity and revision must match --model-profile"
             )
+        if args.model_manifest is None:
+            raise ValueError("local model-source requires --model-manifest")
+        verification = verify_artifact_manifest(
+            source_path,
+            args.model_manifest,
+            args.model_profile,
+        )
         source = source_path
         model_id = args.model_id
         revision = args.model_revision
         allow_download = False
+        artifact_manifest = args.model_manifest
+        artifact_sha256 = verification.tree_sha256
     else:
-        if args.model_id or args.model_revision:
+        if args.model_id or args.model_revision or args.model_manifest:
             raise ValueError(
-                "--model-id and --model-revision require --model-source"
+                "--model-id, --model-revision, and --model-manifest require "
+                "--model-source"
             )
         profile_config = ZeroShotConfig.from_profile(args.model_profile)
         source = profile_config.model_source
         model_id = profile_config.model_id
         revision = profile_config.revision
         allow_download = args.allow_download
+        artifact_manifest = None
+        artifact_sha256 = None
     return ZeroShotPredictor(
         ZeroShotConfig(
             model_source=source,
@@ -201,6 +220,8 @@ def _build_predictor(args: argparse.Namespace):
             profile_id=args.model_profile,
             subsystem_threshold=args.subsystem_threshold,
             severity_threshold=args.severity_threshold,
+            artifact_manifest=artifact_manifest,
+            artifact_sha256=artifact_sha256,
         )
     )
 
@@ -212,6 +233,36 @@ def _parser() -> argparse.ArgumentParser:
     subparsers.add_parser(
         "models",
         help="list model profiles without loading model artifacts",
+    )
+
+    model_manifest = subparsers.add_parser(
+        "model-manifest",
+        help="create or verify a SHA-256 manifest for a local model",
+    )
+    manifest_commands = model_manifest.add_subparsers(
+        dest="manifest_command",
+        required=True,
+    )
+    manifest_create = manifest_commands.add_parser(
+        "create",
+        help="print a deterministic model manifest as JSON",
+    )
+    manifest_create.add_argument("model_directory", type=Path)
+    manifest_create.add_argument(
+        "--model-profile",
+        choices=MODEL_PROFILE_IDS,
+        default=ENGLISH_PROFILE_ID,
+    )
+    manifest_verify = manifest_commands.add_parser(
+        "verify",
+        help="verify a local model against a manifest",
+    )
+    manifest_verify.add_argument("model_directory", type=Path)
+    manifest_verify.add_argument("manifest", type=Path)
+    manifest_verify.add_argument(
+        "--model-profile",
+        choices=MODEL_PROFILE_IDS,
+        default=ENGLISH_PROFILE_ID,
     )
 
     validate = subparsers.add_parser("validate", help="validate input JSONL")
@@ -367,6 +418,23 @@ def _run_workspace(args: argparse.Namespace) -> None:
 
 
 def _run(args: argparse.Namespace) -> None:
+    if args.command == "model-manifest":
+        if args.manifest_command == "create":
+            _emit(
+                create_artifact_manifest(
+                    args.model_directory,
+                    args.model_profile,
+                )
+            )
+            return
+        verification = verify_artifact_manifest(
+            args.model_directory,
+            args.manifest,
+            args.model_profile,
+        )
+        _emit({"status": "verified", **asdict(verification)})
+        return
+
     if args.command == "models":
         _emit(
             {
@@ -416,6 +484,7 @@ def _run(args: argparse.Namespace) -> None:
                 or args.model_source
                 or args.model_id
                 or args.model_revision
+                or args.model_manifest
             ):
                 raise ValueError(
                     "custom model options require --adapter zero-shot"

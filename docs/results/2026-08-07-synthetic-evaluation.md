@@ -52,8 +52,10 @@ After placing the pinned model in a local directory:
       tests/fixtures/synthetic-evaluation.jsonl \
       --adapter zero-shot --model-source <local-model-directory> \
       --model-id MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c \
-      --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda
+      --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda \
+      --model-manifest <external-model-manifest.json>
 
 Reproduction additionally requires the exact model artifacts and declared
-dependencies. The committed fixture and evaluator are included; model files are
-intentionally excluded.
+dependencies. Create and verify the external manifest with `log-classify
+model-manifest` before the run. The committed fixture and evaluator are
+included; model files are intentionally excluded.

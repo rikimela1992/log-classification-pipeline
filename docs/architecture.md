@@ -20,6 +20,7 @@ publication path.
 | adapters/rules.py | Provide a deterministic wiring baseline for synthetic demos | Abstain when subsystem evidence is absent |
 | adapters/zero_shot.py | Lazy-load a pinned NLI encoder, offline by default | Fail before publication on missing artifacts or invalid model output |
 | model_profiles.py | Resolve versioned model, prompt, language, and taxonomy configurations | Reject unknown profiles before artifact loading |
+| model_artifact.py | Create bounded SHA-256 inventories and private verified copies of local models | Reject identity drift, unsafe entries, concurrent changes, or any file mismatch before model import |
 | application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
 | workspace.py | Persist versioned job states with local users, roles, sessions, retention, worker capabilities, and audit | Deny before prediction; apply state transitions and terminal results atomically |
@@ -92,16 +93,32 @@ not append audit events. This is not a remote deployment architecture.
 
 ## Model boundary
 
+![Verified local model artifact flow](assets/model-artifact-verification.svg)
+
 Model weights, tokenizers, caches, and datasets are external artifacts and must
 not be committed. The default Hub adapter revision is immutable, remote
 downloads are opt-in, remote code is disabled, and `safetensors` is required.
-Local-directory model identity and revision are explicitly declared by the
-caller but are not yet verified against an artifact manifest. Known profiles
-bind model and revision, supported-language intent, candidate descriptions,
-hypothesis templates, and truncation behavior. Each result includes a
-deterministic configuration digest covering the resolved per-head abstention
-thresholds and inference batch size. The adapter does not include the input
-message.
+Local-directory model identity and revision must match a known profile. A
+strict external manifest binds that identity to the size and SHA-256 digest of
+every relevant file. At load time the adapter copies those files through
+no-follow descriptors into a private temporary directory, verifies the copy,
+and makes the framework load from that verified snapshot. Root `.cache` and
+`.git` directories are excluded because they are operational metadata;
+symbolic links, hard links, and special files elsewhere are rejected. Known
+profiles bind model and revision, supported-language intent, candidate
+descriptions, hypothesis templates, and truncation behavior. Each result
+includes the verified artifact tree digest plus a deterministic configuration
+digest covering that digest, the resolved per-head abstention thresholds, and
+inference batch size. The adapter does not include the input message.
+
+The manifest detects changes relative to the file inventory from which it was
+created. It is not signed and does not prove that those original files came
+from a trusted publisher; artifact acquisition and initial trust remain an
+operator responsibility. The private snapshot prevents aliases outside the
+model directory from changing the bytes between verification and framework
+loading, but it does not defend against the owning OS account or host root.
+Loading requires temporary free disk space approximately equal to the model and
+removes the snapshot after tokenizer/model construction.
 
 ## Deliberate exclusions
 

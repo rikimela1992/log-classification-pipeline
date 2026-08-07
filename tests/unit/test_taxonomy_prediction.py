@@ -121,6 +121,31 @@ class PredictionContractTests(unittest.TestCase):
         with self.assertRaises(PredictionContractError):
             validate_classification_prediction(signed, 1)
 
+    def test_artifact_digest_requires_profile_and_is_strict(self) -> None:
+        digest = "sha256:" + ("b" * 64)
+        record = valid_prediction()
+        record["model"].update(
+            {
+                "profile_id": "english-deberta-v1",
+                "profile_revision": "1",
+                "config_sha256": "sha256:" + ("a" * 64),
+                "artifact_sha256": digest,
+            }
+        )
+        normalized = validate_classification_prediction(record, 1)
+        self.assertEqual(normalized["model"]["artifact_sha256"], digest)
+
+        without_profile = valid_prediction()
+        without_profile["model"]["artifact_sha256"] = digest
+        with self.assertRaisesRegex(PredictionContractError, "requires a profile"):
+            validate_classification_prediction(without_profile, 1)
+
+        invalid = valid_prediction()
+        invalid["model"].update(record["model"])
+        invalid["model"]["artifact_sha256"] = "sha256:not-valid"
+        with self.assertRaisesRegex(PredictionContractError, "artifact_sha256"):
+            validate_classification_prediction(invalid, 1)
+
     def test_callers_can_supply_a_versioned_label_subset(self) -> None:
         record = valid_prediction()
         record["subsystem"] = {"label": "custom-subsystem", "score": 0.5}

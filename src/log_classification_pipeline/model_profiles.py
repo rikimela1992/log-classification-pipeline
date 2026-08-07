@@ -115,6 +115,7 @@ def profile_configuration_digest(
     subsystem_threshold: float,
     severity_threshold: float,
     inference_batch_size: int,
+    artifact_sha256: str | None = None,
 ) -> str:
     configuration = {
         **profile.canonical_configuration(),
@@ -124,6 +125,8 @@ def profile_configuration_digest(
         "severity_threshold": severity_threshold,
         "subsystem_threshold": subsystem_threshold,
     }
+    if artifact_sha256 is not None:
+        configuration["artifact_sha256"] = artifact_sha256
     encoded = json.dumps(
         configuration,
         ensure_ascii=True,

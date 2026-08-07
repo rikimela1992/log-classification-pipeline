@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from log_classification_pipeline.adapters.rules import RulesPredictor
 from log_classification_pipeline.adapters.zero_shot import ZeroShotConfig, ZeroShotPredictor
@@ -9,6 +12,7 @@ from log_classification_pipeline.model_catalog import (
     configured_model_catalog,
     registered_model_catalog,
 )
+from log_classification_pipeline.model_artifact import create_artifact_manifest
 from log_classification_pipeline.model_profiles import (
     MODEL_PROFILE_IDS,
     MULTILINGUAL_BALANCED_PROFILE_ID,
@@ -112,6 +116,7 @@ class ModelCatalogTests(unittest.TestCase):
         )
         self.assertEqual(catalog[0]["quality_status"], "wiring-baseline")
         self.assertTrue(catalog[0]["artifact_bundled"])
+        self.assertIsNone(catalog[0]["artifact_verified"])
         self.assertEqual(catalog[1]["languages"], ["en", "it", "fr", "es"])
         self.assertEqual(catalog[1]["execution_tier"], "cpu-fast")
         self.assertFalse(catalog[1]["artifact_bundled"])
@@ -236,6 +241,32 @@ class ZeroShotConfigTests(unittest.TestCase):
 
 
 class ZeroShotPredictorTests(unittest.TestCase):
+    def test_verified_artifact_digest_enters_config_and_prediction_provenance(self) -> None:
+        fake = FakeZeroShotPipeline()
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        model_root = Path(temporary.name) / "model"
+        model_root.mkdir()
+        (model_root / "config.json").write_text("{}\n", encoding="utf-8")
+        manifest = create_artifact_manifest(model_root, "english-deberta-v1")
+        manifest_path = Path(temporary.name) / "manifest.json"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+        digest = manifest["tree_sha256"]
+        config = ZeroShotConfig(
+            model_source=model_root,
+            artifact_manifest=manifest_path,
+            artifact_sha256=digest,
+        )
+        baseline_digest = ZeroShotConfig().configuration_digest
+
+        prediction = ZeroShotPredictor(
+            config,
+            pipeline_factory=lambda _: fake,
+        )([{"message": "synthetic"}])[0]
+
+        self.assertEqual(prediction["model"]["artifact_sha256"], digest)
+        self.assertNotEqual(config.configuration_digest, baseline_digest)
+
     def test_pipeline_is_lazy_reused_and_receives_bounded_options(self) -> None:
         fake = FakeZeroShotPipeline()
         factory_calls = []

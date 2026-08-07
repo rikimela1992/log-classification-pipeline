@@ -18,6 +18,8 @@ def _rules_metadata() -> dict[str, Any]:
     return {
         "adapter": "rules",
         "artifact_bundled": True,
+        "artifact_verified": None,
+        "artifact_sha256": None,
         "execution_tier": "cpu-fast",
         "experimental": True,
         "id": RULES_MODEL_NAME,
@@ -35,6 +37,8 @@ def _profile_metadata(profile_id: str) -> dict[str, Any]:
     return {
         "adapter": "zero-shot",
         "artifact_bundled": False,
+        "artifact_verified": False,
+        "artifact_sha256": None,
         "execution_tier": profile.execution_tier,
         "experimental": True,
         "id": profile.profile_id,
@@ -51,6 +55,8 @@ def _custom_metadata(model_name: str) -> dict[str, Any]:
     return {
         "adapter": "custom",
         "artifact_bundled": None,
+        "artifact_verified": None,
+        "artifact_sha256": None,
         "execution_tier": "unknown",
         "experimental": True,
         "id": model_name,
@@ -110,4 +116,12 @@ def configured_model_catalog(
             raise ValueError(
                 "registered profile names require their matching zero-shot predictor"
             )
-    return registered_model_catalog(predictors)
+    catalog = registered_model_catalog(predictors)
+    by_name = {item["id"]: item for item in catalog}
+    for model_name, predictor in predictors.items():
+        if type(predictor) is ZeroShotPredictor and predictor.config.artifact_sha256:
+            by_name[model_name]["artifact_verified"] = True
+            by_name[model_name]["artifact_sha256"] = (
+                predictor.config.artifact_sha256
+            )
+    return catalog

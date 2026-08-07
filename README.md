@@ -59,6 +59,12 @@ stores raw uploads in SQLite. See the
 [web workspace guide](docs/web-workspace.md). This is not a remotely exposed
 multi-tenant service.
 
+![Authenticated dashboard with synthetic data](docs/assets/dashboard-preview.png)
+
+The screenshot is a real localhost session rendered from a disposable workspace
+containing only synthetic users, job counts, timestamps, and audit events. The
+browser workflow is localized in English, Italian, French, and Spanish.
+
 ## Fail-closed batch contract
 
 Every non-blank input line must be a UTF-8 JSON object with a non-blank
@@ -155,13 +161,34 @@ startup.
 For zero-shot inference:
 
     .venv/bin/python -m pip install '.[ml]'
+    .venv/bin/log-classify model-manifest create /path/to/local/model \
+      --model-profile english-deberta-v1 > /path/to/model-manifest.json
+    .venv/bin/log-classify model-manifest verify /path/to/local/model \
+      /path/to/model-manifest.json --model-profile english-deberta-v1
     .venv/bin/log-classify classify input.jsonl output.jsonl --adapter zero-shot \
       --model-source /path/to/local/model \
       --model-id MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c \
-      --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda
+      --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda \
+      --model-manifest /path/to/model-manifest.json
 
 Downloads are disabled by default. Pass `--allow-download` only when network
 access and the pinned model provenance are acceptable.
+
+The manifest must remain outside the model directory. It binds the selected
+profile to a sorted inventory of relevant local files, their sizes, and their
+SHA-256 digests. Local loading verifies it once during configuration and again
+while copying the inventoried files into a private temporary directory. That
+copy is verified before Transformers is imported, and the framework reads the
+verified copy. The verified tree digest is included in every prediction and
+evaluation provenance record.
+
+![Local model artifact verification](docs/assets/model-artifact-verification.svg)
+
+A locally created manifest detects later drift; it is not a signature or a
+third-party trust assertion. Create it only after obtaining the pinned model
+from a trusted source. Model weights and caches remain outside this repository.
+The temporary snapshot is removed after the tokenizer and model are loaded;
+plan for temporary free disk space approximately equal to the model size.
 
 On a compatible CPU-only Linux host, install a CPU build of PyTorch first;
 otherwise the generic resolver may select large accelerator dependencies that
@@ -233,7 +260,9 @@ mismatches, exceptions in later chunks, symlink and path aliases, overwrite
 behavior, resource-limit boundaries, Unicode JSONL separators, bounded predictor
 output, atomic cleanup, post-publication durability errors, workspace RBAC,
 pre-session and session-bound CSRF, bounded uploads, security headers, and
-privacy-minimal web exports. Web integration tests require `.[web,test]`.
+privacy-minimal web exports. Manifest tests cover tampering, missing and added
+files, path traversal, symbolic links, strict JSON, bounds, and re-verification
+before model loading. Web integration tests require `.[web,test]`.
 
 ## Security and privacy
 
@@ -254,6 +283,8 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
   accuracy; the larger profiles are not suitable for synchronous CPU use on
   the measured host.
 - Model artifacts and optional dependencies are not bundled.
+- Verified local loading copies the model temporarily, increasing cold-start
+  time and requiring free disk space approximately equal to the artifact.
 - The Gradio UI is an unauthenticated localhost demonstration. The separate web
   workspace is authenticated but remains localhost-only and alpha.
 - The authenticated workspace supports one organization per SQLite database.
@@ -286,7 +317,8 @@ privacy-minimal web exports. Web integration tests require `.[web,test]`.
    synthetic evaluation set.
 3. Calibrate separate subsystem/severity thresholds on a larger development set
    and validate the selected profile on an independently authored holdout.
-4. Add an explicit artifact manifest and cache verification workflow.
+4. Add a signed or independently attested artifact trust workflow; the current
+   local manifest detects drift but does not establish who supplied the files.
 5. Review cross-platform publication semantics and document supported
    filesystems.
 6. Run the larger pinned multilingual profiles on suitable GPU infrastructure,

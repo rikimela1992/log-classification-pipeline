@@ -35,7 +35,8 @@ input. The current artifact is approximately 1.14 GB before runtime memory.
 
 All profiles currently use English candidate descriptions and hypothesis
 templates. Profile IDs, profile revisions, resolved model identity,
-prompt/candidate configuration, batch size, and both abstention thresholds
+prompt/candidate configuration, batch size, both abstention thresholds, and an
+optional verified local artifact digest
 contribute to a SHA-256 configuration digest emitted with each prediction.
 
 The multilingual profiles cover English, Italian, French, and Spanish.
@@ -68,10 +69,21 @@ interactive default.
 - Local loading is the default; network download requires
   `--allow-download`.
 - Remote model code is disabled and `safetensors` is required.
-- A local directory requires `--model-source`, `--model-id`, and
-  `--model-revision`. ID and revision must match the selected registered
-  profile. They are not verified against directory contents; an artifact hash
-  manifest is still planned.
+- A local directory requires `--model-source`, `--model-id`,
+  `--model-revision`, and `--model-manifest`. ID and revision must match the
+  selected registered profile, and every relevant file must match the strict
+  SHA-256 manifest before the adapter imports Transformers.
+- The manifest is kept outside the model directory. Root `.cache` and `.git`
+  directories are operational metadata and are excluded; every other file is
+  inventoried. Symbolic links, hard links, special files, unsafe paths, added
+  files, missing files, byte-budget races, and content changes fail closed.
+- At load time the inventoried files are copied into a private `0700`
+  temporary directory and that copy is verified against the manifest.
+  Transformers reads the verified copy, which is removed after model and
+  tokenizer construction. Cold loading therefore needs temporary free disk
+  space approximately equal to the artifact size.
+- A generated manifest binds bytes to a declared profile but is not signed
+  provenance. Generate it only from a trusted copy of the pinned revision.
 - Offline deployment should set `HF_HUB_OFFLINE=1` and
   `TRANSFORMERS_OFFLINE=1`.
 
@@ -111,7 +123,23 @@ log-classify evaluate tests/fixtures/synthetic-evaluation-multilingual.jsonl \
 ```
 
 For offline use, pass a local directory plus the exact identity and revision of
-the selected profile. `--subsystem-threshold` and `--severity-threshold` can
+the selected profile and its verified external manifest:
+
+```console
+log-classify model-manifest create /models/english-deberta \
+  --model-profile english-deberta-v1 > /models/english-deberta.manifest.json
+log-classify model-manifest verify /models/english-deberta \
+  /models/english-deberta.manifest.json \
+  --model-profile english-deberta-v1
+log-classify classify input.jsonl output.jsonl --adapter zero-shot \
+  --model-profile english-deberta-v1 \
+  --model-source /models/english-deberta \
+  --model-id MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c \
+  --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda \
+  --model-manifest /models/english-deberta.manifest.json
+```
+
+`--subsystem-threshold` and `--severity-threshold` can
 override the shared `--confidence-threshold`; resolved values enter the
 configuration digest.
 

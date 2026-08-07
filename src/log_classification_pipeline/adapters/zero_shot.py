@@ -3,11 +3,16 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass
 from numbers import Real
 from pathlib import Path
 from typing import Any, Protocol
 
+from ..model_artifact import (
+    materialize_verified_artifact,
+    verify_artifact_manifest,
+)
 from ..model_profiles import (
     ENGLISH_PROFILE_ID,
     get_model_profile,
@@ -37,6 +42,8 @@ class ZeroShotConfig:
     severity_threshold: float | None = None
     inference_batch_size: int = 8
     profile_id: str = ENGLISH_PROFILE_ID
+    artifact_manifest: str | Path | None = None
+    artifact_sha256: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.model_source, (str, Path)) or not str(
@@ -70,9 +77,47 @@ class ZeroShotConfig:
         ):
             raise ValueError("inference_batch_size must be a positive integer")
         profile = get_model_profile(self.profile_id)
-        if self.model_id != profile.model_id or self.revision != profile.model_revision:
+        if (
+            self.model_id != profile.model_id
+            or self.revision != profile.model_revision
+        ):
             raise ValueError(
                 "model_id and revision must match the selected model profile"
+            )
+        if (self.artifact_manifest is None) != (self.artifact_sha256 is None):
+            raise ValueError(
+                "artifact_manifest and artifact_sha256 must be provided together"
+            )
+        if self.artifact_manifest is not None and (
+            not isinstance(self.artifact_manifest, (str, Path))
+            or not str(self.artifact_manifest).strip()
+        ):
+            raise ValueError("artifact_manifest must not be blank")
+        if self.artifact_sha256 is not None:
+            if not isinstance(self.artifact_sha256, str):
+                raise ValueError("artifact_sha256 must be a SHA-256 digest")
+            hexadecimal = self.artifact_sha256.removeprefix("sha256:")
+            if (
+                len(self.artifact_sha256) != 71
+                or not self.artifact_sha256.startswith("sha256:")
+                or any(
+                    character not in "0123456789abcdef"
+                    for character in hexadecimal
+                )
+            ):
+                raise ValueError("artifact_sha256 must be a SHA-256 digest")
+            verification = verify_artifact_manifest(
+                Path(self.model_source),
+                self.artifact_manifest,
+                self.profile_id,
+            )
+            if verification.tree_sha256 != self.artifact_sha256:
+                raise ValueError(
+                    "artifact_sha256 does not match the verified artifact manifest"
+                )
+        if isinstance(self.model_source, Path) and self.artifact_manifest is None:
+            raise ValueError(
+                "a local Path model_source requires a verified artifact manifest"
             )
 
     @property
@@ -106,42 +151,64 @@ class ZeroShotConfig:
             subsystem_threshold=self.resolved_subsystem_threshold,
             severity_threshold=self.resolved_severity_threshold,
             inference_batch_size=self.inference_batch_size,
+            artifact_sha256=self.artifact_sha256,
         )
 
 
 def load_zero_shot_pipeline(config: ZeroShotConfig) -> ZeroShotPipeline:
     """Load only local files unless the caller explicitly permits a download."""
 
-    try:
-        from transformers import (
-            AutoModelForSequenceClassification,
-            AutoTokenizer,
-            pipeline,
+    source_path = Path(config.model_source)
+    local_source = isinstance(config.model_source, Path) or source_path.is_dir()
+    if local_source:
+        if config.artifact_manifest is None or config.artifact_sha256 is None:
+            raise RuntimeError(
+                "local model loading requires a verified artifact manifest"
+            )
+        source_context = materialize_verified_artifact(
+            source_path,
+            config.artifact_manifest,
+            config.profile_id,
         )
-    except ImportError as exc:
-        raise RuntimeError(
-            "zero-shot support is optional; install "
-            "'log-classification-pipeline[ml]'"
-        ) from exc
+    else:
+        source_context = nullcontext((source_path, None))
 
-    common = {
-        "revision": config.revision,
-        "local_files_only": not config.allow_download,
-        "trust_remote_code": False,
-    }
-    source = str(config.model_source)
-    tokenizer = AutoTokenizer.from_pretrained(source, **common)
-    model = AutoModelForSequenceClassification.from_pretrained(
-        source,
-        use_safetensors=True,
-        **common,
-    )
-    return pipeline(
-        task="zero-shot-classification",
-        model=model,
-        tokenizer=tokenizer,
-        device=config.device,
-    )
+    with source_context as (load_root, verification):
+        if (
+            verification is not None
+            and verification.tree_sha256 != config.artifact_sha256
+        ):
+            raise RuntimeError("local model artifact digest changed before loading")
+        try:
+            from transformers import (
+                AutoModelForSequenceClassification,
+                AutoTokenizer,
+                pipeline,
+            )
+        except ImportError as exc:
+            raise RuntimeError(
+                "zero-shot support is optional; install "
+                "'log-classification-pipeline[ml]'"
+            ) from exc
+
+        common = {
+            "revision": config.revision,
+            "local_files_only": not config.allow_download,
+            "trust_remote_code": False,
+        }
+        source = str(load_root if local_source else config.model_source)
+        tokenizer = AutoTokenizer.from_pretrained(source, **common)
+        model = AutoModelForSequenceClassification.from_pretrained(
+            source,
+            use_safetensors=True,
+            **common,
+        )
+        return pipeline(
+            task="zero-shot-classification",
+            model=model,
+            tokenizer=tokenizer,
+            device=config.device,
+        )
 
 
 def _as_result_list(raw: object, expected: int, task: str) -> list[Mapping[str, Any]]:
@@ -269,6 +336,11 @@ class ZeroShotPredictor:
                     "profile_id": profile.profile_id,
                     "profile_revision": profile.profile_revision,
                     "config_sha256": self.config.configuration_digest,
+                    **(
+                        {"artifact_sha256": self.config.artifact_sha256}
+                        if self.config.artifact_sha256 is not None
+                        else {}
+                    ),
                 },
             }
             predictions.append(

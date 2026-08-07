@@ -365,6 +365,39 @@ class EvaluationTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "mix model provenance"):
             evaluate_records(records, lambda inputs: mixed)
 
+    def test_mixed_artifact_provenance_is_rejected(self) -> None:
+        records = [
+            {
+                "message": "one",
+                "expected_subsystem": "auth",
+                "expected_severity": "error",
+            },
+            {
+                "message": "two",
+                "expected_subsystem": "network",
+                "expected_severity": "warning",
+            },
+        ]
+        common = {
+            "profile_id": "english-deberta-v1",
+            "profile_revision": "1",
+            "config_sha256": "sha256:" + ("a" * 64),
+        }
+        mixed = [
+            prediction("auth", "error", model_id="same"),
+            prediction("network", "warning", model_id="same"),
+        ]
+        for index, item in enumerate(mixed):
+            item["model"].update(
+                {
+                    **common,
+                    "artifact_sha256": "sha256:" + (("b", "c")[index] * 64),
+                }
+            )
+
+        with self.assertRaisesRegex(ValueError, "mix model provenance"):
+            evaluate_records(records, lambda inputs: mixed)
+
     def test_language_metrics_expose_worst_group_and_accuracy_gap(self) -> None:
         records = [
             {

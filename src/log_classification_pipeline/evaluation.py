@@ -254,6 +254,7 @@ def evaluate_records(
             item["model"].get("profile_id"),
             item["model"].get("profile_revision"),
             item["model"].get("config_sha256"),
+            item["model"].get("artifact_sha256"),
         )
         for item in predictions
     }
