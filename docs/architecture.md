@@ -21,6 +21,7 @@ publication path.
 | adapters/zero_shot.py | Lazy-load a pinned NLI encoder, offline by default | Fail before publication on missing artifacts or invalid model output |
 | application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
+| workspace.py | Persist complete classifications with local users, roles, sessions, retention, and audit | Deny before prediction; commit a complete job and its audit event together |
 
 ## Processing sequence
 
@@ -37,6 +38,13 @@ publication path.
    the destination directory.
 7. Flush, apply the requested mode, and sync the file; publish it without
    overwrite by default; then sync the parent directory.
+
+For workspace classification, authorization is checked before reading the
+source or invoking the predictor. The file pipeline completes in a private
+temporary directory. The normalized results, exact input/output counts, source
+digest, expiry timestamps, and success audit event are then committed in one
+SQLite transaction. A validation, prediction, authorization, or database
+failure leaves no successful workspace job.
 
 ## Publication states
 
@@ -57,6 +65,12 @@ make arbitrary fields safe to store or disclose. The predictor runs in the
 caller's process and is outside this library's security boundary. Destination
 filesystem semantics are deployment assumptions that must be validated by an
 integrator.
+
+The local workspace database is one-organization-per-file. Every application
+query is organization-scoped, but SQLite is not a host-level isolation boundary.
+Database paths are opened without implicit creation after bootstrap, symlinks
+and permissive files/directories are rejected, and unknown schemas fail before
+DDL. These checks do not defend against the owning OS account or host root.
 
 ## Model boundary
 

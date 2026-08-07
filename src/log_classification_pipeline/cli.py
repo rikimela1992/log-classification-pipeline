@@ -3,16 +3,20 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
+import sqlite3
 import sys
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
 from .adapters import RulesPredictor, ZeroShotConfig, ZeroShotPredictor
+from .application import classify_file_into_workspace
 from .batch import process_batch
 from .evaluation import evaluate_records
 from .jsonl import read_jsonl
+from .workspace import RetentionPolicy, Role, Workspace
 
 
 def _add_limits(parser: argparse.ArgumentParser) -> None:
@@ -45,6 +49,78 @@ def _add_adapter(parser: argparse.ArgumentParser) -> None:
         help="explicitly permit a pinned Hub download",
     )
     parser.add_argument("--confidence-threshold", type=float, default=0.60)
+
+
+def _add_workspace_identity(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("database", type=Path)
+    parser.add_argument("organization")
+    parser.add_argument("username")
+
+
+def _add_workspace_commands(subparsers: argparse._SubParsersAction) -> None:
+    workspace = subparsers.add_parser(
+        "workspace",
+        help="manage a local authenticated classification workspace",
+    )
+    commands = workspace.add_subparsers(dest="workspace_command", required=True)
+
+    initialize = commands.add_parser(
+        "init",
+        help="create the first local administrator",
+    )
+    initialize.add_argument("database", type=Path)
+    initialize.add_argument("organization")
+    initialize.add_argument("username")
+
+    user_add = commands.add_parser("user-add", help="add a user to the workspace")
+    _add_workspace_identity(user_add)
+    user_add.add_argument("new_username")
+    user_add.add_argument("--role", choices=tuple(Role), required=True)
+
+    classify = commands.add_parser(
+        "classify",
+        help="classify a JSONL file and persist only a complete job",
+    )
+    _add_workspace_identity(classify)
+    classify.add_argument("input", type=Path)
+    classify.add_argument(
+        "--store-raw",
+        action="store_true",
+        help="retain source bytes according to policy; disabled by default",
+    )
+    classify.add_argument("--batch-size", type=int, default=64)
+    _add_limits(classify)
+    _add_adapter(classify)
+
+    jobs = commands.add_parser("jobs", help="list recent classification jobs")
+    _add_workspace_identity(jobs)
+    jobs.add_argument("--limit", type=int, default=50)
+
+    show = commands.add_parser("show", help="export one job as JSON")
+    _add_workspace_identity(show)
+    show.add_argument("job_id")
+
+    retention_show = commands.add_parser(
+        "retention-show",
+        help="show the organization's retention policy",
+    )
+    _add_workspace_identity(retention_show)
+
+    retention_set = commands.add_parser(
+        "retention-set",
+        help="set retention periods; existing job expiries are unchanged",
+    )
+    _add_workspace_identity(retention_set)
+    retention_set.add_argument("--raw-days", type=int, required=True)
+    retention_set.add_argument("--result-days", type=int, required=True)
+    retention_set.add_argument("--audit-days", type=int, required=True)
+
+    purge = commands.add_parser("purge", help="purge data whose retention expired")
+    _add_workspace_identity(purge)
+
+    audit = commands.add_parser("audit", help="show privacy-minimal audit events")
+    _add_workspace_identity(audit)
+    audit.add_argument("--limit", type=int, default=100)
 
 
 def _build_predictor(args: argparse.Namespace):
@@ -117,11 +193,102 @@ def _parser() -> argparse.ArgumentParser:
     ui = subparsers.add_parser("ui", help="launch the local Gradio interface")
     _add_adapter(ui)
     ui.add_argument("--port", type=int, default=7860)
+    _add_workspace_commands(subparsers)
     return parser
 
 
 def _emit(value: Any) -> None:
     print(json.dumps(value, indent=2, sort_keys=True))
+
+
+def _read_secret(prompt: str, *, confirm: bool = False) -> str:
+    password = getpass.getpass(prompt)
+    if confirm:
+        repeated = getpass.getpass("Confirm password: ")
+        if password != repeated:
+            raise ValueError("passwords do not match")
+    return password
+
+
+def _workspace_login(args: argparse.Namespace, workspace: Workspace) -> str:
+    token, _ = workspace.login(
+        args.organization,
+        args.username,
+        _read_secret("Password: "),
+    )
+    return token
+
+
+def _run_workspace(args: argparse.Namespace) -> None:
+    workspace = Workspace(args.database)
+    if args.workspace_command == "init":
+        organization_id, user_id = workspace.bootstrap(
+            args.organization,
+            args.username,
+            _read_secret("New administrator password: ", confirm=True),
+        )
+        _emit(
+            {
+                "administrator_id": user_id,
+                "database": str(args.database),
+                "organization_id": organization_id,
+                "status": "initialized",
+            }
+        )
+        return
+
+    token = _workspace_login(args, workspace)
+    try:
+        if args.workspace_command == "user-add":
+            user_id = workspace.create_user(
+                token,
+                args.new_username,
+                _read_secret("New user password: ", confirm=True),
+                args.role,
+            )
+            _emit({"role": args.role, "status": "created", "user_id": user_id})
+            return
+        if args.workspace_command == "classify":
+            predictor = _build_predictor(args)
+            summary, job_id = classify_file_into_workspace(
+                args.input,
+                predictor,
+                workspace,
+                token,
+                store_raw=args.store_raw,
+                batch_size=args.batch_size,
+                max_input_bytes=args.max_input_bytes,
+                max_records=args.max_records,
+            )
+            _emit({"job_id": job_id, "summary": summary})
+            return
+        if args.workspace_command == "jobs":
+            _emit(workspace.list_jobs(token, limit=args.limit))
+            return
+        if args.workspace_command == "show":
+            _emit(workspace.get_job(token, args.job_id))
+            return
+        if args.workspace_command == "retention-show":
+            _emit(asdict(workspace.get_retention_policy(token)))
+            return
+        if args.workspace_command == "retention-set":
+            policy = RetentionPolicy(
+                raw_days=args.raw_days,
+                result_days=args.result_days,
+                audit_days=args.audit_days,
+            )
+            workspace.set_retention_policy(token, policy)
+            _emit({"policy": asdict(policy), "status": "updated"})
+            return
+        if args.workspace_command == "purge":
+            _emit(asdict(workspace.purge_expired(token)))
+            return
+        if args.workspace_command == "audit":
+            _emit(workspace.list_audit_events(token, limit=args.limit))
+            return
+    finally:
+        workspace.logout(token)
+    raise AssertionError(f"unhandled workspace command: {args.workspace_command}")
 
 
 def _run(args: argparse.Namespace) -> None:
@@ -139,6 +306,10 @@ def _run(args: argparse.Namespace) -> None:
                 "valid": True,
             }
         )
+        return
+
+    if args.command == "workspace":
+        _run_workspace(args)
         return
 
     predictor = _build_predictor(args)
@@ -181,7 +352,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         _run(_parser().parse_args(argv))
-    except (OSError, RuntimeError, ValueError) as exc:
+    except (OSError, RuntimeError, ValueError, sqlite3.Error) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 0

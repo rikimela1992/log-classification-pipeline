@@ -7,10 +7,16 @@ from pathlib import Path
 from unittest import mock
 
 from log_classification_pipeline.adapters.rules import RulesPredictor
-from log_classification_pipeline.application import classify_file_preview, classify_message
+from log_classification_pipeline.application import (
+    classify_file_into_workspace,
+    classify_file_preview,
+    classify_message,
+)
 from log_classification_pipeline.contracts import PredictionContractError
+from log_classification_pipeline.contracts import BatchResourceLimitError
 from log_classification_pipeline.evaluation import evaluate_records
 from log_classification_pipeline.taxonomy import SEVERITY_LABELS, SUBSYSTEM_LABELS, TAXONOMY_VERSION
+from log_classification_pipeline.workspace import AuthorizationError, Role, Workspace
 
 
 def prediction(subsystem: str, severity: str, *, abstained: bool = False, model_id: str = "fixture"):
@@ -68,6 +74,175 @@ class ApplicationTests(unittest.TestCase):
                         classify_file_preview(path, RulesPredictor(), preview_limit=limit)
             with self.assertRaises(ValueError):
                 classify_file_preview(path, RulesPredictor(), max_records=1)
+
+    def test_workspace_classification_is_complete_and_privacy_minimal_by_default(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            input_path = root / "input.jsonl"
+            input_path.write_text(
+                '{"message":"Authentication failed"}\n',
+                encoding="utf-8",
+            )
+            workspace = Workspace(root / "state" / "workspace.sqlite3")
+            workspace.bootstrap(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            token, _ = workspace.login(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+
+            summary, job_id = classify_file_into_workspace(
+                input_path,
+                RulesPredictor(),
+                workspace,
+                token,
+            )
+            job = workspace.get_job(token, job_id, include_raw=True)
+
+        self.assertEqual(summary["input_records"], 1)
+        self.assertEqual(job["status"], "succeeded")
+        self.assertIsNone(job["raw_payload"])
+        self.assertEqual(job["results"][0]["subsystem"]["label"], "auth")
+        self.assertNotIn("message", job["results"][0])
+
+    def test_failed_workspace_classification_leaves_no_job(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            input_path = root / "input.jsonl"
+            input_path.write_text('{"message":"synthetic"}\n', encoding="utf-8")
+            workspace = Workspace(root / "workspace.sqlite3")
+            workspace.bootstrap(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            token, _ = workspace.login(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+
+            with self.assertRaises(PredictionContractError):
+                classify_file_into_workspace(
+                    input_path,
+                    lambda records: [],
+                    workspace,
+                    token,
+                )
+
+            self.assertEqual(workspace.list_jobs(token), [])
+
+    def test_workspace_denies_viewer_before_reading_or_calling_predictor(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            input_path = root / "input.jsonl"
+            input_path.write_text('{"message":"synthetic"}\n', encoding="utf-8")
+            workspace = Workspace(root / "workspace.sqlite3")
+            workspace.bootstrap(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            admin_token, _ = workspace.login(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            workspace.create_user(
+                admin_token,
+                "reviewer",
+                "viewer-password-value",
+                Role.VIEWER,
+            )
+            viewer_token, _ = workspace.login(
+                "sample-org",
+                "reviewer",
+                "viewer-password-value",
+            )
+            workspace.create_user(
+                admin_token,
+                "analyst",
+                "analyst-password-value",
+                Role.ANALYST,
+            )
+            analyst_token, _ = workspace.login(
+                "sample-org",
+                "analyst",
+                "analyst-password-value",
+            )
+            predictor_calls = []
+
+            def predictor(records):
+                predictor_calls.append(len(records))
+                return [prediction("compute", "routine") for _ in records]
+
+            with self.assertRaises(AuthorizationError):
+                classify_file_into_workspace(
+                    input_path,
+                    predictor,
+                    workspace,
+                    viewer_token,
+                )
+
+            self.assertEqual(predictor_calls, [])
+            self.assertEqual(workspace.list_jobs(viewer_token), [])
+
+            with self.assertRaises(AuthorizationError):
+                classify_file_into_workspace(
+                    input_path,
+                    predictor,
+                    workspace,
+                    analyst_token,
+                    store_raw=True,
+                )
+            self.assertEqual(predictor_calls, [])
+
+    def test_workspace_raw_reread_remains_bounded_if_source_grows(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            input_path = root / "input.jsonl"
+            input_path.write_text('{"message":"synthetic"}\n', encoding="utf-8")
+            workspace = Workspace(root / "workspace.sqlite3")
+            workspace.bootstrap(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            token, _ = workspace.login(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            from log_classification_pipeline import application
+
+            real_process_batch = application.process_batch
+
+            def mutate_after_classification(*args, **kwargs):
+                summary = real_process_batch(*args, **kwargs)
+                input_path.write_bytes(b"x" * 101)
+                return summary
+
+            with (
+                mock.patch(
+                    "log_classification_pipeline.application.process_batch",
+                    side_effect=mutate_after_classification,
+                ),
+                self.assertRaises(BatchResourceLimitError),
+            ):
+                classify_file_into_workspace(
+                    input_path,
+                    RulesPredictor(),
+                    workspace,
+                    token,
+                    store_raw=True,
+                    max_input_bytes=100,
+                )
+
+            self.assertEqual(workspace.list_jobs(token), [])
 
 
 class EvaluationTests(unittest.TestCase):

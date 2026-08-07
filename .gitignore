@@ -22,3 +22,6 @@ output/
 *.pth
 *.bin
 *.log
+*.sqlite
+*.sqlite3
+*.sqlite3-*

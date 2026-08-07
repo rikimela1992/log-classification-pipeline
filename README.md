@@ -47,6 +47,13 @@ failure semantics.
 
 The CLI and local UI call the same fail-closed application services.
 
+An optional local authenticated workspace now adds an offline consult-and-export
+flow with separate admin, analyst, and viewer roles. It uses a private SQLite
+database, retains raw source bytes only when explicitly requested, and applies
+separate retention periods to raw data, results, and audit events. See the
+[local workspace guide](docs/local-workspace.md). It is not a remotely exposed
+multi-tenant service.
+
 ## Fail-closed batch contract
 
 Every non-blank input line must be a UTF-8 JSON object with a non-blank
@@ -103,6 +110,17 @@ For the local UI:
 
     .venv/bin/python -m pip install '.[ui]'
     .venv/bin/log-classify ui
+
+For the authenticated local workspace:
+
+    .venv/bin/log-classify workspace init ./state/workspace.sqlite3 sample-org owner
+    .venv/bin/log-classify workspace classify \
+      ./state/workspace.sqlite3 sample-org owner examples/input-valid.jsonl
+    .venv/bin/log-classify workspace jobs \
+      ./state/workspace.sqlite3 sample-org owner
+
+Passwords are prompted interactively. The workspace has no default credentials
+and does not accept passwords as command-line arguments.
 
 For zero-shot inference:
 
@@ -166,6 +184,12 @@ output, atomic cleanup, and post-publication durability errors.
 - Model artifacts and optional dependencies are not bundled.
 - The UI binds only to localhost and is a demonstration, not an authenticated
   service.
+- The authenticated workspace is local CLI infrastructure for one organization
+  per SQLite database. It is not an HTTP API, remotely accessible UI, SSO
+  integration, or production multi-tenant isolation boundary.
+- Workspace database permissions and SQLite secure deletion do not provide
+  encryption at rest or guarantee erasure from backups, snapshots, SSDs, or
+  copy-on-write storage.
 - Input is read and validated in memory. Resource limits are opt-in and no
   default operational profile is claimed.
 - Atomicity and durability behavior is designed for local POSIX-like
@@ -186,5 +210,8 @@ output, atomic cleanup, and post-publication durability errors.
 4. Add an explicit artifact manifest and cache verification workflow.
 5. Review cross-platform publication semantics and document supported
    filesystems.
-6. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
+6. Add a separately threat-modelled HTTP API and authenticated web interface;
+   keep network exposure disabled until CSRF, rate limits, TLS deployment, and
+   integration tests exist.
+7. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
    the foundation scope.

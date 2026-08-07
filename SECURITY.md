@@ -4,7 +4,8 @@
 
 This repository is an early batch-processing foundation and is not
 production-ready. It does not include a model, dataset, service endpoint, or
-deployment configuration.
+deployment configuration. It includes an optional authenticated local CLI
+workspace, which is not a remotely exposed identity or authorization service.
 
 ## Reporting a vulnerability
 
@@ -20,12 +21,19 @@ timeline.
 
 ## Security boundary
 
-The library validates JSONL structure and the batch/predictor cardinality
-contract. It does not authenticate callers, authorize file access, isolate the
-predictor, remove sensitive fields, detect malicious content, or provide a
-network service. Integrators remain responsible for least privilege, data
-minimization, selecting explicit byte and record limits, and deployment
-security.
+The core library validates JSONL structure and the batch/predictor cardinality
+contract. It does not authenticate callers, authorize source-file access,
+isolate the predictor, remove sensitive fields, detect malicious content, or
+provide a network service.
+
+The optional local workspace adds password authentication, service-layer role
+checks, session expiry, retention, and audit boundaries for its own operations.
+It does not protect against the operating-system account that owns the database,
+host administrators, copied database files, or code in the same process. It
+does not provide TLS, SSO, HTTP cookies, CSRF protection, or brute-force rate
+limits because it opens no network listener. Integrators remain responsible for
+least privilege, data minimization, explicit resource limits, storage
+encryption, backups, and deployment security.
 
 ## Supported versions
 

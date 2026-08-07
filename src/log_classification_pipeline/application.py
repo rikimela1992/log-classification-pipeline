@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import tempfile
 from dataclasses import asdict
@@ -9,6 +10,8 @@ from pathlib import Path
 from typing import Any
 
 from .batch import Predictor, process_batch
+from .contracts import BatchResourceLimitError
+from .workspace import Workspace
 
 
 def _read_predictions(
@@ -71,3 +74,52 @@ def classify_file_preview(
             output_path,
             limit=preview_limit,
         )
+
+
+def classify_file_into_workspace(
+    input_path: str | Path,
+    predictor: Predictor,
+    workspace: Workspace,
+    session_token: str,
+    *,
+    store_raw: bool = False,
+    batch_size: int = 64,
+    max_input_bytes: int = 1_000_000,
+    max_records: int = 1_000,
+) -> tuple[dict[str, Any], str]:
+    """Classify completely, then atomically persist a successful workspace job."""
+
+    workspace.authorize_classification(session_token, retain_raw=store_raw)
+    source = Path(input_path)
+    with tempfile.TemporaryDirectory(prefix="log-classify-") as directory:
+        output_path = Path(directory) / "output.jsonl"
+        summary = process_batch(
+            source,
+            output_path,
+            predictor,
+            batch_size=batch_size,
+            max_input_bytes=max_input_bytes,
+            max_records=max_records,
+        )
+        results = _read_predictions(output_path)
+        raw_payload: bytes | None = None
+        if store_raw:
+            with source.open("rb") as stream:
+                raw_payload = stream.read(max_input_bytes + 1)
+            if len(raw_payload) > max_input_bytes:
+                raise BatchResourceLimitError(
+                    "input byte count",
+                    max_input_bytes,
+                    observed_at_least=len(raw_payload),
+                )
+            observed_digest = hashlib.sha256(raw_payload).hexdigest()
+            if observed_digest != summary.source_sha256:
+                raise RuntimeError("input changed after classification; job was not stored")
+        job_id = workspace.store_completed_job(
+            session_token,
+            summary.source_sha256,
+            summary.input_records,
+            results,
+            raw_payload=raw_payload,
+        )
+    return asdict(summary), job_id
