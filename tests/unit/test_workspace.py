@@ -136,6 +136,43 @@ class WorkspaceTestCase(unittest.TestCase):
         with self.assertRaises(AuthenticationError):
             self.workspace.principal(token, now=NOW)
 
+    def test_csrf_is_bound_to_one_live_session(self) -> None:
+        second_token, _ = self.workspace.login(
+            "sample-org",
+            "owner",
+            PASSWORD,
+            now=NOW,
+        )
+        first_csrf = self.workspace.csrf_token(self.admin_token, now=NOW)
+
+        self.assertEqual(
+            self.workspace.verify_csrf(self.admin_token, first_csrf, now=NOW),
+            self.admin,
+        )
+        with self.assertRaises(AuthorizationError):
+            self.workspace.verify_csrf(second_token, first_csrf, now=NOW)
+
+        self.workspace.logout(self.admin_token, now=NOW)
+        with self.assertRaises(AuthenticationError):
+            self.workspace.verify_csrf(self.admin_token, first_csrf, now=NOW)
+
+    def test_user_listing_is_admin_only_and_bounded(self) -> None:
+        analyst_token = self.create_user_and_login("analyst", Role.ANALYST)
+        users = self.workspace.list_users(self.admin_token, now=NOW)
+
+        self.assertEqual([item["username"] for item in users], ["analyst", "owner"])
+        self.assertNotIn("password_hash", repr(users))
+        with self.assertRaises(AuthorizationError):
+            self.workspace.list_users(analyst_token, now=NOW)
+        for invalid_limit in (True, 0, 201):
+            with self.subTest(limit=invalid_limit):
+                with self.assertRaises(ValueError):
+                    self.workspace.list_users(
+                        self.admin_token,
+                        limit=invalid_limit,
+                        now=NOW,
+                    )
+
     def test_role_matrix_blocks_viewer_and_limits_raw_access(self) -> None:
         analyst_token = self.create_user_and_login("analyst", Role.ANALYST)
         viewer_token = self.create_user_and_login("viewer", Role.VIEWER)
@@ -259,6 +296,46 @@ class WorkspaceTestCase(unittest.TestCase):
                 now=NOW,
             )
         self.assertEqual(self.workspace.list_jobs(self.admin_token, now=NOW), [])
+
+    def test_job_listing_supports_bounded_offset_pagination(self) -> None:
+        job_ids = {
+            self.workspace.store_completed_job(
+                self.admin_token,
+                f"{index:064x}",
+                1,
+                [prediction()],
+                now=NOW,
+            )
+            for index in range(1, 4)
+        }
+
+        first_page = self.workspace.list_jobs(
+            self.admin_token,
+            limit=2,
+            offset=0,
+            now=NOW,
+        )
+        second_page = self.workspace.list_jobs(
+            self.admin_token,
+            limit=2,
+            offset=2,
+            now=NOW,
+        )
+        first_ids = {item["id"] for item in first_page}
+        second_ids = {item["id"] for item in second_page}
+        self.assertEqual(len(first_page), 2)
+        self.assertEqual(len(second_page), 1)
+        self.assertFalse(first_ids & second_ids)
+        self.assertEqual(first_ids | second_ids, job_ids)
+
+        for invalid_offset in (True, -1, 100_001):
+            with self.subTest(offset=invalid_offset):
+                with self.assertRaises(ValueError):
+                    self.workspace.list_jobs(
+                        self.admin_token,
+                        offset=invalid_offset,
+                        now=NOW,
+                    )
 
     def test_retention_hides_at_boundary_then_purges_idempotently(self) -> None:
         self.workspace.set_retention_policy(

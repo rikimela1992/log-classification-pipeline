@@ -125,6 +125,8 @@ def _add_workspace_commands(subparsers: argparse._SubParsersAction) -> None:
 
 def _build_predictor(args: argparse.Namespace):
     if args.adapter == "rules":
+        if args.model_source or args.model_id or args.model_revision or args.allow_download:
+            raise ValueError("model options require --adapter zero-shot")
         return RulesPredictor(
             confidence_threshold=args.confidence_threshold,
         )
@@ -193,6 +195,15 @@ def _parser() -> argparse.ArgumentParser:
     ui = subparsers.add_parser("ui", help="launch the local Gradio interface")
     _add_adapter(ui)
     ui.add_argument("--port", type=int, default=7860)
+
+    web = subparsers.add_parser(
+        "web",
+        help="launch the authenticated local web workspace",
+    )
+    web.add_argument("database", type=Path)
+    web.add_argument("--port", type=int, default=8080)
+    _add_limits(web)
+    _add_adapter(web)
     _add_workspace_commands(subparsers)
     return parser
 
@@ -310,6 +321,46 @@ def _run(args: argparse.Namespace) -> None:
 
     if args.command == "workspace":
         _run_workspace(args)
+        return
+
+    if args.command == "web":
+        try:
+            import uvicorn
+
+            from .web import WebSettings, create_app
+        except ImportError as exc:
+            raise RuntimeError(
+                "the web workspace is optional; install "
+                "'log-classification-pipeline[web]'"
+            ) from exc
+        if isinstance(args.port, bool) or not 1 <= args.port <= 65535:
+            raise ValueError("port must be an integer between 1 and 65535")
+        selected_predictor = _build_predictor(args)
+        predictors = {
+            "rules": RulesPredictor(
+                confidence_threshold=args.confidence_threshold,
+            )
+        }
+        if args.adapter == "zero-shot":
+            predictors["zero-shot"] = selected_predictor
+        else:
+            predictors["rules"] = selected_predictor
+        application = create_app(
+            WebSettings(
+                database_path=args.database,
+                max_input_bytes=args.max_input_bytes,
+                max_records=args.max_records,
+                max_request_bytes=args.max_input_bytes + 262_144,
+            ),
+            predictors,
+        )
+        uvicorn.run(
+            application,
+            host="127.0.0.1",
+            port=args.port,
+            access_log=False,
+            proxy_headers=False,
+        )
         return
 
     predictor = _build_predictor(args)

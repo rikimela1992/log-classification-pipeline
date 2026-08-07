@@ -4,14 +4,16 @@
 
 The workspace is an alpha, local-first reference implementation. It turns the
 fail-closed classifier into a consult-and-export workflow with separate users,
-roles, retention periods, and privacy-minimal audit events. It does not start a
-network listener and is not a production identity service.
+roles, retention periods, and privacy-minimal audit events. The workspace CLI
+does not start a network listener and is not a production identity service. A
+separate optional [web adapter](web-workspace.md) can expose the same service on
+loopback only.
 
 The first slice deliberately supports one organization per database. It uses
 SQLite from the Python standard library so the authorization and retention
-boundaries can be exercised offline. A future remotely accessible service will
-need a separate threat model, HTTP session protection, rate limiting, CSRF
-protection, TLS, migrations, backup/restore procedures, and a server database.
+boundaries can be exercised offline. Any future remotely accessible service
+will still need a separate threat model, rate limiting, TLS, migrations,
+backup/restore procedures, and a server database.
 
 ## Role matrix
 

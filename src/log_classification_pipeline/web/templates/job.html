@@ -1,0 +1,27 @@
+{% extends "base.html" %}
+{% block title %}Job · Log Classification Pipeline{% endblock %}
+{% block content %}
+<p><a href="/app">← Dashboard</a></p>
+<section class="hero compact-hero">
+  <div><p class="eyebrow">Completed classification</p><h1>Job {{ job.id }}</h1></div>
+  <span class="status">{{ job.status }}</span>
+</section>
+<section class="metrics">
+  <div><span>Input</span><strong>{{ job.input_records }}</strong></div>
+  <div><span>Output</span><strong>{{ job.output_records }}</strong></div>
+  <div><span>Digest</span><code>{{ job.source_sha256 }}</code></div>
+</section>
+<section class="panel">
+  <div class="section-heading"><h2>Results</h2><a class="button secondary" href="/app/jobs/{{ job.id }}/export">Export JSONL</a></div>
+  <div class="cards">
+  {% for result in job.results %}
+    <article class="result-card">
+      <div><span class="label">Subsystem</span><strong>{{ result.subsystem.label }}</strong><small>{{ result.subsystem.score }}</small></div>
+      <div><span class="label">Severity</span><strong>{{ result.severity.label }}</strong><small>{{ result.severity.score }}</small></div>
+      <div><span class="label">Model</span><strong>{{ result.model.id }}</strong><small>{{ result.model.revision }}</small></div>
+      {% if result.abstained %}<span class="abstained">Abstained</span>{% endif %}
+    </article>
+  {% endfor %}
+  </div>
+</section>
+{% endblock %}

@@ -22,6 +22,7 @@ publication path.
 | application.py / cli.py | Expose shared local workflows | Return concise errors and non-zero CLI status |
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
 | workspace.py | Persist complete classifications with local users, roles, sessions, retention, and audit | Deny before prediction; commit a complete job and its audit event together |
+| web/app.py | Provide an optional authenticated loopback API and server-rendered UI | Authenticate, authorize, check CSRF, and enforce request limits before parsing uploads or invoking a predictor |
 
 ## Processing sequence
 
@@ -72,6 +73,13 @@ Database paths are opened without implicit creation after bootstrap, symlinks
 and permissive files/directories are rejected, and unknown schemas fail before
 DDL. These checks do not defend against the owning OS account or host root.
 
+The web adapter is a separate optional boundary over the workspace service. It
+binds to loopback in the CLI, does not trust proxy headers, allows no CORS
+origins, and keeps API bearer authentication separate from UI cookie sessions.
+It uses one in-process semaphore per configured predictor. This bounds
+concurrent model execution, not total HTTP concurrency, and is not a remote
+deployment architecture.
+
 ## Model boundary
 
 Model weights, tokenizers, caches, and datasets are external artifacts and must
@@ -85,5 +93,5 @@ not include the input message.
 ## Deliberate exclusions
 
 The candidate contains no bundled model artifact, training code, dataset,
-production log, deployment manifest, remotely exposed service, infrastructure
-identifier, or secret-management integration.
+production log, deployment manifest, remotely exposed service, syslog listener,
+infrastructure identifier, or secret-management integration.

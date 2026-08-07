@@ -49,9 +49,12 @@ The CLI and local UI call the same fail-closed application services.
 
 An optional local authenticated workspace now adds an offline consult-and-export
 flow with separate admin, analyst, and viewer roles. It uses a private SQLite
-database, retains raw source bytes only when explicitly requested, and applies
-separate retention periods to raw data, results, and audit events. See the
-[local workspace guide](docs/local-workspace.md). It is not a remotely exposed
+database, retains raw source bytes only when explicitly requested from the CLI,
+and applies separate retention periods to raw data, results, and audit events.
+The optional web adapter adds a localhost-only browser interface and HTTP API;
+its web surface never retains raw uploads. See the
+[local workspace guide](docs/local-workspace.md) and
+[web workspace guide](docs/web-workspace.md). This is not a remotely exposed
 multi-tenant service.
 
 ## Fail-closed batch contract
@@ -122,6 +125,16 @@ For the authenticated local workspace:
 Passwords are prompted interactively. The workspace has no default credentials
 and does not accept passwords as command-line arguments.
 
+For the authenticated localhost web interface and API:
+
+    .venv/bin/python -m pip install '.[web]'
+    .venv/bin/log-classify web ./state/workspace.sqlite3
+
+Then open `http://127.0.0.1:8080/app`. The server binds only to loopback and is
+an alpha local workflow, not an Internet-facing deployment. See the
+[web workspace guide](docs/web-workspace.md) for roles, API behavior, and
+security boundaries.
+
 For zero-shot inference:
 
     .venv/bin/python -m pip install '.[ml]'
@@ -153,7 +166,9 @@ and model provenance; they do not copy the source message.
 
 See [model selection](docs/model-selection.md) for the rationale and
 [synthetic evaluation results](docs/results/2026-08-07-synthetic-evaluation.md)
-for the first honest, deliberately small measurement.
+for the first honest, deliberately small measurement. The separate
+[local web security validation](docs/results/2026-08-07-web-security-validation.md)
+records the current authentication, upload, packaging, and privacy checks.
 
 ## Running tests
 
@@ -163,7 +178,9 @@ for the first honest, deliberately small measurement.
 The suite covers strict parsing, aggregate validation errors, predictor count
 mismatches, exceptions in later chunks, symlink and path aliases, overwrite
 behavior, resource-limit boundaries, Unicode JSONL separators, bounded predictor
-output, atomic cleanup, and post-publication durability errors.
+output, atomic cleanup, post-publication durability errors, workspace RBAC,
+session-bound CSRF, bounded uploads, security headers, and privacy-minimal web
+exports. Web integration tests require `.[web,test]`.
 
 ## Security and privacy
 
@@ -182,11 +199,13 @@ output, atomic cleanup, and post-publication durability errors.
 - The zero-shot adapter is experimental and English-oriented; its scores are not
   calibrated probabilities.
 - Model artifacts and optional dependencies are not bundled.
-- The UI binds only to localhost and is a demonstration, not an authenticated
-  service.
-- The authenticated workspace is local CLI infrastructure for one organization
-  per SQLite database. It is not an HTTP API, remotely accessible UI, SSO
-  integration, or production multi-tenant isolation boundary.
+- The Gradio UI is an unauthenticated localhost demonstration. The separate web
+  workspace is authenticated but remains localhost-only and alpha.
+- The authenticated workspace supports one organization per SQLite database.
+  Its optional HTTP API and browser interface are not a remotely supported
+  service, an SSO integration, or a production multi-tenant isolation boundary.
+- The web adapter has no brute-force rate limiter, TLS termination, reverse
+  proxy support, account recovery, or server database.
 - Workspace database permissions and SQLite secure deletion do not provide
   encryption at rest or guarantee erasure from backups, snapshots, SSDs, or
   copy-on-write storage.
@@ -210,8 +229,11 @@ output, atomic cleanup, and post-publication durability errors.
 4. Add an explicit artifact manifest and cache verification workflow.
 5. Review cross-platform publication semantics and document supported
    filesystems.
-6. Add a separately threat-modelled HTTP API and authenticated web interface;
-   keep network exposure disabled until CSRF, rate limits, TLS deployment, and
-   integration tests exist.
-7. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
+6. Localize the web workflow for English, Italian, French, and Spanish and
+   benchmark an explicitly multilingual classifier before making accuracy claims.
+7. Add rate limits and a deployment threat model before considering any
+   non-loopback API or web exposure.
+8. Add bounded syslog ingestion with backpressure, source authentication, and a
+   separate retention policy; keep it disabled by default.
+9. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
    the foundation scope.

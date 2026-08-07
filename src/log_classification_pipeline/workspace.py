@@ -467,6 +467,12 @@ class Workspace:
                 """
             )
 
+    def verify(self) -> None:
+        """Fail closed unless this is a recognized, accessible workspace."""
+
+        with self._connect() as connection:
+            connection.execute("SELECT 1").fetchone()
+
     def bootstrap(
         self,
         organization: str,
@@ -593,11 +599,20 @@ class Workspace:
                    WHERE organizations.slug = ? AND users.username = ?""",
                 (organization_slug, normalized_username),
             ).fetchone()
+            password_input_valid = (
+                isinstance(password, str)
+                and 1 <= len(password) <= _PASSWORD_MAX_LENGTH
+            )
             password_is_valid = _password_matches(
-                password,
+                password if password_input_valid else "invalid-password-input",
                 row["password_hash"] if row is not None else _DUMMY_PASSWORD_HASH,
             )
-            if row is None or row["disabled"] or not password_is_valid:
+            if (
+                row is None
+                or row["disabled"]
+                or not password_input_valid
+                or not password_is_valid
+            ):
                 organization_row = connection.execute(
                     "SELECT id FROM organizations WHERE slug = ?",
                     (organization_slug,),
@@ -715,6 +730,49 @@ class Workspace:
             self._require(principal, Role.ADMIN)
         return principal
 
+    def authorize_admin(
+        self,
+        token: str,
+        *,
+        now: datetime | None = None,
+    ) -> Principal:
+        principal = self.principal(token, now=now)
+        self._require(principal, Role.ADMIN)
+        return principal
+
+    def csrf_token(self, token: str, *, now: datetime | None = None) -> str:
+        """Derive a session-bound CSRF value without exposing the session token."""
+
+        self.principal(token, now=now)
+        return self._csrf_digest(token)
+
+    @staticmethod
+    def _csrf_digest(token: str) -> str:
+        try:
+            token_bytes = token.encode("ascii")
+        except UnicodeEncodeError as exc:
+            raise AuthenticationError("invalid session") from exc
+        return hmac.new(
+            token_bytes,
+            b"log-classification-pipeline:csrf:v1",
+            hashlib.sha256,
+        ).hexdigest()
+
+    def verify_csrf(
+        self,
+        token: str,
+        submitted: str,
+        *,
+        now: datetime | None = None,
+    ) -> Principal:
+        if not isinstance(submitted, str) or not submitted:
+            raise AuthorizationError("invalid CSRF token")
+        principal = self.principal(token, now=now)
+        expected = self._csrf_digest(token)
+        if not hmac.compare_digest(expected, submitted):
+            raise AuthorizationError("invalid CSRF token")
+        return principal
+
     def create_user(
         self,
         token: str,
@@ -762,6 +820,25 @@ class Workspace:
         except sqlite3.IntegrityError as exc:
             raise ConflictError("username already exists in this organization") from exc
         return user_id
+
+    def list_users(
+        self,
+        token: str,
+        *,
+        limit: int = 100,
+        now: datetime | None = None,
+    ) -> list[dict[str, Any]]:
+        principal = self.authorize_admin(token, now=now)
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
+            raise ValueError("limit must be an integer between 1 and 200")
+        with self._connect() as connection:
+            rows = connection.execute(
+                """SELECT id, username, role, disabled, created_at
+                   FROM users WHERE organization_id = ?
+                   ORDER BY username ASC, id ASC LIMIT ?""",
+                (principal.organization_id, limit),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def get_retention_policy(
         self, token: str, *, now: datetime | None = None
@@ -1081,11 +1158,18 @@ class Workspace:
         token: str,
         *,
         limit: int = 50,
+        offset: int = 0,
         now: datetime | None = None,
     ) -> list[dict[str, Any]]:
         principal = self.principal(token, now=now)
-        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 200:
-            raise ValueError("limit must be an integer between 1 and 200")
+        if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 201:
+            raise ValueError("limit must be an integer between 1 and 201")
+        if (
+            isinstance(offset, bool)
+            or not isinstance(offset, int)
+            or not 0 <= offset <= 100_000
+        ):
+            raise ValueError("offset must be an integer between 0 and 100000")
         with self._connect() as connection:
             instant_timestamp = _timestamp(now or _utc_now())
             rows = connection.execute(
@@ -1093,8 +1177,8 @@ class Workspace:
                           created_at, completed_at,
                           (results_json IS NOT NULL) AS has_results
                    FROM jobs WHERE organization_id = ? AND results_expires_at > ?
-                   ORDER BY created_at DESC, id DESC LIMIT ?""",
-                (principal.organization_id, instant_timestamp, limit),
+                   ORDER BY created_at DESC, id DESC LIMIT ? OFFSET ?""",
+                (principal.organization_id, instant_timestamp, limit, offset),
             ).fetchall()
         return [dict(row) for row in rows]
 

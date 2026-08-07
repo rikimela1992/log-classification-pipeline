@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  {% if csrf %}<meta name="csrf-token" content="{{ csrf }}">{% endif %}
+  <title>{% block title %}Log Classification Pipeline{% endblock %}</title>
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/app">Log Classification Pipeline</a>
+    {% if principal %}
+      <div class="identity">
+        <span>{{ principal.username }} · {{ principal.role.value }}</span>
+        <form action="/app/logout" method="post" data-secure-form>
+          <button class="button secondary" type="submit">Sign out</button>
+        </form>
+      </div>
+    {% endif %}
+  </header>
+  <div class="alpha-banner">Alpha local workspace — not production-ready</div>
+  <main class="container">
+    <noscript><div class="alert" role="alert">This local interface requires JavaScript for protected form submissions. The HTTP API remains available to authenticated clients.</div></noscript>
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>
