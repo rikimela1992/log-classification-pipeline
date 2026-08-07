@@ -4,6 +4,7 @@ import os
 import subprocess
 import unittest
 from pathlib import Path
+from xml.etree import ElementTree
 
 
 ROOT = Path(__file__).parents[2]
@@ -55,6 +56,17 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertIn("--exclude-module torch", builder)
         self.assertIn("--exclude-module transformers", builder)
         self.assertIn("doctor --require web", builder)
+
+    def test_appstream_identity_is_valid_without_an_unreachable_url(self) -> None:
+        metadata = ElementTree.parse(
+            ROOT / "packaging/linux/log-classification-pipeline.appdata.xml"
+        ).getroot()
+        self.assertEqual(
+            metadata.findtext("id"),
+            "io.github.rikimela1992.log-classification-pipeline",
+        )
+        self.assertEqual(metadata.findtext("developer/name"), "Riccardo Melini")
+        self.assertIsNone(metadata.find("url"))
 
 
 if __name__ == "__main__":

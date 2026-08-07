@@ -40,7 +40,11 @@ jobs:
         run: python -m pip install '.[web]' "pyinstaller==$PYINSTALLER_VERSION" "pip-licenses==$PIP_LICENSES_VERSION"
 
       - name: Record source epoch
-        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+        run: |
+          epoch=$(git log -1 --format=%ct)
+          test -n "$epoch"
+          test "$epoch" -eq "$epoch"
+          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
 
       - name: Generate runtime SBOM and dependency lock
         env:
@@ -190,7 +194,12 @@ jobs:
           build-venv/bin/python -m pip install '.[web]' "pyinstaller==$PYINSTALLER_VERSION" "pip-licenses==$PIP_LICENSES_VERSION"
 
       - name: Record source epoch
-        run: echo "SOURCE_DATE_EPOCH=$(git log -1 --format=%ct)" >> "$GITHUB_ENV"
+        run: |
+          git config --global --add safe.directory "$GITHUB_WORKSPACE"
+          epoch=$(git log -1 --format=%ct)
+          test -n "$epoch"
+          test "$epoch" -eq "$epoch"
+          echo "SOURCE_DATE_EPOCH=$epoch" >> "$GITHUB_ENV"
 
       - name: Build native Fedora bundle and RPM
         env:

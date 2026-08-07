@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <component type="desktop-application">
-  <id>log-classification-pipeline</id>
+  <id>io.github.rikimela1992.log-classification-pipeline</id>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>MIT</project_license>
   <name>Log Classification Pipeline</name>
@@ -12,8 +12,10 @@
     </p>
     <p>This alpha is not production-ready and includes no machine-learning model.</p>
   </description>
+  <developer id="io.github.rikimela1992">
+    <name>Riccardo Melini</name>
+  </developer>
   <launchable type="desktop-id">log-classification-pipeline.desktop</launchable>
-  <url type="homepage">https://github.com/rikimela1992/log-classification-pipeline</url>
   <releases>
     <release version="0.1.0-alpha.1" date="2026-08-07" type="development"/>
   </releases>
