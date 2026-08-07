@@ -1,0 +1,2 @@
+{"message":"synthetic worker started","app":"demo-worker","severity":"info"}
+{"message":"synthetic queue reached a demo threshold","app":"demo-scheduler","severity":"warning"}
