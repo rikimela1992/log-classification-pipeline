@@ -2,9 +2,10 @@
 
 ## Project status
 
-This repository contains an early batch-processing foundation for a future log
-classification pipeline. It is **not production-ready**. No license has been
-selected yet, so publication and reuse require a separate licensing decision.
+This repository contains the alpha batch-processing foundation for a future log
+classification pipeline. It is **not production-ready**. The planned first
+release is `v0.1.0-alpha.1`, titled **Fail-closed batch-processing foundation**.
+The project is available under the [MIT License](LICENSE).
 
 All examples and test records are synthetic. This repository includes no model,
 checkpoint, tokenizer, dataset, production log, or operational configuration.
@@ -139,4 +140,5 @@ behavior, atomic cleanup, and post-publication durability errors.
 4. Add end-to-end synthetic equivalence fixtures and performance measurements.
 5. Review cross-platform publication semantics and document supported
    filesystems.
-6. Select a license and release strategy before public distribution.
+6. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing
+   the foundation scope.
