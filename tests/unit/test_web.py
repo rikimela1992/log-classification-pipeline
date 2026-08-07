@@ -29,6 +29,7 @@ else:
         negotiate_locale,
         translator,
     )
+    from log_classification_pipeline.web.rate_limit import LoginRateLimiter
     from log_classification_pipeline.web.worker import (
         LocalClassificationQueue,
         WorkerUnavailableError,
@@ -40,7 +41,7 @@ from log_classification_pipeline.adapters import RulesPredictor
 from log_classification_pipeline.adapters.zero_shot import ZeroShotPredictor
 from log_classification_pipeline.cli import main
 from log_classification_pipeline.model_profiles import MULTILINGUAL_PROFILE_ID
-from log_classification_pipeline.workspace import Role, Workspace
+from log_classification_pipeline.workspace import AuthenticationError, Role, Workspace
 
 
 PASSWORD = "correct-horse-battery-staple"
@@ -242,6 +243,7 @@ class WebApplicationTests(unittest.TestCase):
         self.assertIn("Cookie", page.headers["vary"])
         self.assertIn('<html lang="it">', page.text)
         self.assertIn("Accedi", page.text)
+        self.assertIn("Troppi tentativi di accesso", page.text)
 
         api = self.client.post(
             "/api/v1/sessions",
@@ -317,6 +319,75 @@ class WebApplicationTests(unittest.TestCase):
         denied = self.client.get("/api/v1/me", headers=self.bearer(token))
         self.assertEqual(denied.status_code, 401)
         self.assertEqual(denied.json()["code"], "not_authenticated")
+
+    def test_api_and_ui_login_failures_are_bounded_without_echoing_identity(self) -> None:
+        limiter = self.app.state.login_rate_limiter
+        limiter._account_limit = 2
+        limiter._source_limit = 10
+        with mock.patch.object(
+            self.app.state.workspace,
+            "login",
+            side_effect=AuthenticationError("synthetic failure"),
+        ) as login:
+            first = self.client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "owner",
+                    "password": "synthetic-wrong-password",
+                },
+            )
+            self.assertEqual(first.status_code, 401, first.text)
+
+            limited = self.client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "owner",
+                    "password": "synthetic-wrong-password",
+                },
+            )
+            self.assertEqual(limited.status_code, 429, limited.text)
+            self.assertEqual(limited.json()["code"], "login_rate_limited")
+            self.assertGreaterEqual(int(limited.headers["retry-after"]), 1)
+            self.assertNotIn("owner", limited.text)
+            self.assertNotIn("synthetic-wrong-password", limited.text)
+
+            still_limited = self.client.post(
+                "/api/v1/sessions",
+                json={
+                    "organization": "sample-org",
+                    "username": "owner",
+                    "password": PASSWORD,
+                },
+            )
+            self.assertEqual(still_limited.status_code, 429)
+            self.assertEqual(login.call_count, 2)
+
+            login_page = self.client.get(
+                "/app/login",
+                headers={"Accept-Language": "it"},
+            )
+            csrf = self.client.cookies.get("lcp_login_csrf")
+            self.assertIsNotNone(csrf)
+            for expected_status in (401, 429):
+                response = self.client.post(
+                    "/app/login",
+                    data={
+                        "organization": "sample-org",
+                        "username": "analyst",
+                        "password": "synthetic-wrong-password",
+                        "csrf": csrf,
+                    },
+                    headers={
+                        "Origin": "http://testserver",
+                        "X-CSRF-Token": csrf,
+                    },
+                    follow_redirects=False,
+                )
+                self.assertEqual(response.status_code, expected_status, response.text)
+            self.assertEqual(response.json()["code"], "login_rate_limited")
+            self.assertEqual(login.call_count, 4)
 
     def test_model_catalog_is_authenticated_lazy_and_safe_ordered(self) -> None:
         unauthenticated = self.client.get("/api/v1/models")
@@ -1110,6 +1181,87 @@ class WebApplicationTests(unittest.TestCase):
         configured = configured_app.state.predictors[MULTILINGUAL_PROFILE_ID]
         self.assertIsInstance(configured, ZeroShotPredictor)
         self.assertFalse(configured.loaded)
+
+
+@unittest.skipUnless(WEB_AVAILABLE, "web extra is not installed")
+class LoginRateLimiterTests(unittest.TestCase):
+    def test_account_source_expiry_success_and_privacy(self) -> None:
+        now = [100.0]
+        limiter = LoginRateLimiter(
+            account_limit=2,
+            source_limit=3,
+            window_seconds=10,
+            clock=lambda: now[0],
+        )
+
+        self.assertIsNone(limiter.retry_after("client-a", "sample-org", "owner"))
+        self.assertIsNone(
+            limiter.record_failure("client-a", "sample-org", "owner")
+        )
+        self.assertEqual(
+            limiter.record_failure("client-a", "sample-org", "owner"),
+            10,
+        )
+        self.assertEqual(limiter.retry_after("client-a", "sample-org", "owner"), 10)
+        self.assertIsNone(
+            limiter.retry_after("client-b", "sample-org", "different-user")
+        )
+
+        limiter.record_success("client-a", "sample-org", "owner")
+        self.assertIsNone(limiter.retry_after("client-a", "sample-org", "owner"))
+        self.assertEqual(
+            limiter.record_failure("client-a", "sample-org", "different-user"),
+            10,
+        )
+
+        internal_state = repr(vars(limiter))
+        self.assertNotIn("sample-org", internal_state)
+        self.assertNotIn("owner", internal_state)
+        self.assertNotIn("client-a", internal_state)
+
+        now[0] = 111.0
+        self.assertIsNone(
+            limiter.retry_after("client-a", "sample-org", "different-user")
+        )
+
+    def test_configuration_rejects_invalid_limits(self) -> None:
+        with self.assertRaisesRegex(ValueError, "source_limit"):
+            LoginRateLimiter(
+                account_limit=3,
+                source_limit=2,
+                window_seconds=10,
+            )
+        with self.assertRaisesRegex(ValueError, "positive integer"):
+            LoginRateLimiter(
+                account_limit=True,
+                source_limit=2,
+                window_seconds=10,
+            )
+        with self.assertRaisesRegex(ValueError, "login_source_limit"):
+            WebSettings(
+                Path("synthetic-workspace.sqlite3"),
+                login_account_limit=3,
+                login_source_limit=2,
+            )
+
+    def test_bucket_capacity_fails_closed_without_unbounded_keys(self) -> None:
+        limiter = LoginRateLimiter(
+            account_limit=5,
+            source_limit=5,
+            window_seconds=10,
+            max_account_buckets=2,
+            max_source_buckets=1,
+            clock=lambda: 100.0,
+        )
+        self.assertIsNone(
+            limiter.record_failure("client-a", "sample-org", "first-user")
+        )
+        self.assertEqual(
+            limiter.record_failure("client-b", "sample-org", "second-user"),
+            10,
+        )
+        self.assertEqual(len(limiter._accounts), 2)
+        self.assertEqual(len(limiter._sources), 1)
 
 
 if __name__ == "__main__":

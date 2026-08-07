@@ -113,6 +113,16 @@ dependencies. Model and UI dependencies are optional.
     python3 -m venv .venv
     .venv/bin/python -m pip install --no-deps .
 
+Check the core runtime and see which optional feature modules are available
+without importing a model or opening a network listener:
+
+    .venv/bin/log-classify doctor
+
+After creating a workspace, include `--database ./state/workspace.sqlite3` to
+verify its private path and schema. Automation can repeat `--require web`,
+`--require ui`, or `--require ml` to receive a non-zero status when the named
+extra is unavailable.
+
 For the local rules-based wiring demo:
 
     PYTHONPATH=src python3 -m log_classification_pipeline.cli evaluate tests/fixtures/synthetic-evaluation.jsonl
@@ -157,6 +167,10 @@ a profile does not make it the initial selection or load its artifact at
 startup.
 `--queue-capacity` bounds admitted work, including the running job, and
 `--worker-batch-size` controls cancellation/progress checkpoints.
+Failed logins are throttled in-process by both account and direct client source;
+the defaults allow five account failures and twenty source failures per
+60-second window. The limiter retains keyed digests rather than submitted
+organization names, usernames, or client addresses.
 
 For zero-shot inference:
 
@@ -290,8 +304,9 @@ before model loading. Web integration tests require `.[web,test]`.
 - The authenticated workspace supports one organization per SQLite database.
   Its optional HTTP API and browser interface are not a remotely supported
   service, an SSO integration, or a production multi-tenant isolation boundary.
-- The web adapter has no brute-force rate limiter, TLS termination, reverse
-  proxy support, account recovery, or server database.
+- The web adapter's login limiter is process-local and resets on restart. It has
+  no distributed rate limiter, TLS termination, reverse-proxy support, account
+  recovery, or server database.
 - The web queue is one process-local worker. Bounded raw input bytes exist
   transiently in RAM and a private temporary file during execution, and may
   therefore be exposed to swap, core dumps, or the owning OS account. Jobs are
@@ -324,8 +339,8 @@ before model loading. Web integration tests require `.[web,test]`.
 6. Run the larger pinned multilingual profiles on suitable GPU infrastructure,
    then build a larger independently reviewed holdout before making accuracy
    claims.
-7. Add rate limits and a deployment threat model before considering any
-   non-loopback API or web exposure.
+7. Add a distributed rate limit and deployment threat model before considering
+   any non-loopback API or web exposure; the current limiter is process-local.
 8. Add bounded syslog ingestion with backpressure, source authentication, and a
    separate retention policy; keep it disabled by default.
 9. Validate CI, then prepare the planned v0.1.0-alpha.1 release without changing

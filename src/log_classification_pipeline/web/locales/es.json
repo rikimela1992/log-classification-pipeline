@@ -13,6 +13,7 @@
   "login.submit": "Iniciar sesión",
   "login.invalid": "Credenciales no válidas.",
   "login.expired": "La solicitud de inicio de sesión ha caducado. Inténtalo de nuevo.",
+  "login.rate_limited": "Demasiados intentos de inicio de sesión fallidos. Espera un momento e inténtalo de nuevo.",
   "dashboard.title": "Panel",
   "dashboard.eyebrow": "Consultar y exportar",
   "dashboard.heading": "Espacio de clasificación",

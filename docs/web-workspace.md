@@ -35,6 +35,22 @@ and reports progress every 16 records. Both values are explicit CLI controls:
   --queue-capacity 8 --worker-batch-size 16
 ```
 
+The default login policy permits five failed attempts for one account and
+twenty from one direct client source within 60 seconds. The API and browser
+then return `429` with `Retry-After`. These values can be made explicit for a
+local run:
+
+```console
+.venv/bin/log-classify web ./state/workspace.sqlite3 \
+  --login-account-limit 5 --login-source-limit 20 \
+  --login-window-seconds 60
+```
+
+The limiter stores keyed in-memory digests instead of submitted organization,
+username, or client-address strings. It is bounded and shared by the API and
+browser login paths, but resets at process restart and is not a distributed
+rate limit.
+
 The rules baseline is available without model dependencies. To expose the
 known profiles in the selector, install both extras and enable them. Predictors
 remain lazy and downloads remain disabled by default:
@@ -165,10 +181,11 @@ OpenAPI document.
   supplies correctly configured HTTPS, but that deployment is not supported by
   the CLI in this alpha.
 
-There is not yet a brute-force rate limiter. The database audit records login
-failures without the submitted username or password, but authorization denials
-are not all audit events. Use only synthetic or already-sanitized data and keep
-the database on a private, encrypted filesystem where appropriate.
+The database audit records authentication failures that reach the workspace
+without the submitted username or password. Attempts rejected earlier by the
+in-process limiter are not database audit events, and authorization denials are
+not all audit events. Use only synthetic or already-sanitized data and keep the
+database on a private, encrypted filesystem where appropriate.
 
 The browser workflow requires its bundled JavaScript to add the CSRF header to
 protected forms. A visible `<noscript>` warning explains this dependency; the

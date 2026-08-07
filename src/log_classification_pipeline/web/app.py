@@ -48,6 +48,7 @@ from ..jsonl import ParsedBatch, read_jsonl
 from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
 from ..model_profiles import MODEL_PROFILES
 from .i18n import SUPPORTED_LOCALES, load_catalogs, negotiate_locale, translator
+from .rate_limit import LoginRateLimiter
 from .worker import (
     LocalClassificationQueue,
     QueueCapacityError,
@@ -72,6 +73,9 @@ class WebSettings:
     max_request_bytes: int = 1_262_144
     max_admitted_jobs: int = 8
     worker_batch_size: int = 16
+    login_account_limit: int = 5
+    login_source_limit: int = 20
+    login_window_seconds: int = 60
 
     def __post_init__(self) -> None:
         if not self.allowed_hosts or any(not item for item in self.allowed_hosts):
@@ -82,11 +86,19 @@ class WebSettings:
             ("max_request_bytes", self.max_request_bytes),
             ("max_admitted_jobs", self.max_admitted_jobs),
             ("worker_batch_size", self.worker_batch_size),
+            ("login_account_limit", self.login_account_limit),
+            ("login_source_limit", self.login_source_limit),
+            ("login_window_seconds", self.login_window_seconds),
         ):
             if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
                 raise ValueError(f"{name} must be a positive integer")
         if self.max_request_bytes <= self.max_input_bytes:
             raise ValueError("max_request_bytes must exceed max_input_bytes")
+        if self.login_source_limit < self.login_account_limit:
+            raise ValueError(
+                "login_source_limit must be greater than or equal to "
+                "login_account_limit"
+            )
 
 
 class SessionRequest(BaseModel):
@@ -504,6 +516,11 @@ def create_app(
         max_input_bytes=settings.max_input_bytes,
         max_records=settings.max_records,
     )
+    login_rate_limiter = LoginRateLimiter(
+        account_limit=settings.login_account_limit,
+        source_limit=settings.login_source_limit,
+        window_seconds=settings.login_window_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -525,6 +542,7 @@ def create_app(
     app.state.predictors = model_registry
     app.state.model_catalog = model_catalog
     app.state.job_queue = job_queue
+    app.state.login_rate_limiter = login_rate_limiter
     app.add_middleware(RequestSizeLimitMiddleware, max_bytes=settings.max_request_bytes)
     app.add_middleware(AuthenticationPreflightMiddleware, workspace=workspace)
     app.add_middleware(
@@ -589,6 +607,42 @@ def create_app(
             )
         workspace.principal(credentials.credentials)
         return credentials.credentials
+
+    def login_source(request: Request) -> str:
+        return request.client.host if request.client is not None else "unknown"
+
+    def login_retry_after(
+        request: Request,
+        organization: str,
+        username: str,
+    ) -> int | None:
+        return login_rate_limiter.retry_after(
+            login_source(request),
+            organization,
+            username,
+        )
+
+    def record_login_failure(
+        request: Request,
+        organization: str,
+        username: str,
+    ) -> int | None:
+        return login_rate_limiter.record_failure(
+            login_source(request),
+            organization,
+            username,
+        )
+
+    def record_login_success(
+        request: Request,
+        organization: str,
+        username: str,
+    ) -> None:
+        login_rate_limiter.record_success(
+            login_source(request),
+            organization,
+            username,
+        )
 
     def enqueue_sync(path: Path, model_name: str, token: str) -> str:
         if model_name not in model_registry:
@@ -764,15 +818,50 @@ def create_app(
         workspace.verify()
         return {"status": "ok", "maturity": "alpha"}
 
-    @app.post("/api/v1/sessions", status_code=201)
-    def create_session(request: Request, payload: SessionRequest) -> dict[str, Any]:
+    @app.post(
+        "/api/v1/sessions",
+        status_code=201,
+        responses={429: {"description": "Login attempts are temporarily limited"}},
+    )
+    def create_session(
+        request: Request,
+        payload: SessionRequest,
+    ) -> dict[str, Any]:
         if request.cookies.get(_SESSION_COOKIE) is not None:
             raise HTTPException(status_code=400, detail="ambiguous authentication")
-        token, principal = workspace.login(
+        retry_after = login_retry_after(
+            request,
             payload.organization,
             payload.username,
-            payload.password,
         )
+        if retry_after is not None:
+            return _problem_response(
+                429,
+                "login_rate_limited",
+                "Too many failed login attempts; retry later.",
+                headers={"Retry-After": str(retry_after)},
+            )
+        try:
+            token, principal = workspace.login(
+                payload.organization,
+                payload.username,
+                payload.password,
+            )
+        except AuthenticationError:
+            retry_after = record_login_failure(
+                request,
+                payload.organization,
+                payload.username,
+            )
+            if retry_after is not None:
+                return _problem_response(
+                    429,
+                    "login_rate_limited",
+                    "Too many failed login attempts; retry later.",
+                    headers={"Retry-After": str(retry_after)},
+                )
+            raise
+        record_login_success(request, payload.organization, payload.username)
         return {
             "access_token": token,
             "expires_in": _SESSION_SECONDS,
@@ -1019,9 +1108,34 @@ def create_app(
             or not secrets.compare_digest(cookie_csrf, csrf)
         ):
             return login_page(request, "login.expired", status_code=403)
+        retry_after = login_retry_after(request, organization, username)
+        if retry_after is not None:
+            response = login_page(
+                request,
+                "login.rate_limited",
+                status_code=429,
+            )
+            response.headers["Retry-After"] = str(retry_after)
+            return response
         try:
             token, _principal = workspace.login(organization, username, password)
         except (AuthenticationError, ValueError):
+            retry_after = record_login_failure(request, organization, username)
+            if retry_after is not None:
+                if request.headers.get("X-CSRF-Token"):
+                    return _problem_response(
+                        429,
+                        "login_rate_limited",
+                        "Too many failed login attempts; retry later.",
+                        headers={"Retry-After": str(retry_after)},
+                    )
+                response = login_page(
+                    request,
+                    "login.rate_limited",
+                    status_code=429,
+                )
+                response.headers["Retry-After"] = str(retry_after)
+                return response
             if request.headers.get("X-CSRF-Token"):
                 return _problem_response(
                     401,
@@ -1029,6 +1143,7 @@ def create_app(
                     "Invalid credentials.",
                 )
             return login_page(request, "login.invalid", status_code=401)
+        record_login_success(request, organization, username)
         response = RedirectResponse("/app", status_code=303)
         response.set_cookie(
             _SESSION_COOKIE,

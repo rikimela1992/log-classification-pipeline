@@ -32,13 +32,16 @@ The web adapter adds loopback HTTP, strict host validation, bounded requests,
 same-origin checks, pre-session double-submit CSRF for login, session-bound
 CSRF for authenticated operations, secure response headers, and
 `HttpOnly`/`SameSite=Strict` cookies. Authorization is checked before upload
-parsing or predictor invocation. The web surface does not retain raw uploads.
+parsing or predictor invocation. Failed logins are bounded by privacy-minimal,
+in-process account and direct-source windows. The web surface does not retain
+raw uploads.
 
 These controls do not protect against the operating-system account that owns
 the database, host administrators, copied database files, or code in the same
-process. The web adapter does not provide brute-force rate limiting, TLS
-termination, SSO, account recovery, reverse-proxy trust, or a supported remote
-deployment. Integrators remain responsible for least privilege, data
+process. The login limiter resets on process restart and is not a distributed
+or remote-deployment control. The web adapter does not provide TLS termination,
+SSO, account recovery, reverse-proxy trust, or a supported remote deployment.
+Integrators remain responsible for least privilege, data
 minimization, storage encryption, backups, and a legally justified retention
 policy. Do not expose the alpha server beyond loopback.
 

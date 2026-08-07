@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import importlib.util
 import json
 import sqlite3
 import sys
@@ -235,6 +236,24 @@ def _parser() -> argparse.ArgumentParser:
         help="list model profiles without loading model artifacts",
     )
 
+    doctor = subparsers.add_parser(
+        "doctor",
+        help="check the local runtime and optional feature availability",
+    )
+    doctor.add_argument(
+        "--database",
+        type=Path,
+        help="also verify an existing workspace database",
+    )
+    doctor.add_argument(
+        "--require",
+        action="append",
+        choices=("ml", "ui", "web"),
+        default=[],
+        dest="required_features",
+        help="fail when an optional feature is unavailable; repeatable",
+    )
+
     model_manifest = subparsers.add_parser(
         "model-manifest",
         help="create or verify a SHA-256 manifest for a local model",
@@ -316,6 +335,24 @@ def _parser() -> argparse.ArgumentParser:
         type=int,
         default=16,
         help="records per cancellable worker chunk",
+    )
+    web.add_argument(
+        "--login-account-limit",
+        type=int,
+        default=5,
+        help="failed logins per account within the login window",
+    )
+    web.add_argument(
+        "--login-source-limit",
+        type=int,
+        default=20,
+        help="failed logins per client source within the login window",
+    )
+    web.add_argument(
+        "--login-window-seconds",
+        type=int,
+        default=60,
+        help="in-process failed-login window in seconds",
     )
     _add_limits(web)
     _add_adapter(web)
@@ -446,6 +483,57 @@ def _run(args: argparse.Namespace) -> None:
         )
         return
 
+    if args.command == "doctor":
+        required_modules = {
+            "ml": ("sentencepiece", "torch", "transformers"),
+            "ui": ("gradio",),
+            "web": ("fastapi", "jinja2", "multipart", "uvicorn"),
+        }
+        features = {
+            feature: {
+                "available": all(
+                    importlib.util.find_spec(module) is not None
+                    for module in modules
+                ),
+                "modules": list(modules),
+            }
+            for feature, modules in required_modules.items()
+        }
+        workspace_status: dict[str, Any] = {"checked": False}
+        if args.database is not None:
+            workspace = Workspace(args.database)
+            workspace.initialize(create=False)
+            workspace.verify()
+            workspace_status = {"checked": True, "status": "ok"}
+        report = {
+            "core": {
+                "model_profiles": len(MODEL_PROFILE_IDS) + 1,
+                "status": "ok",
+            },
+            "maturity": "alpha",
+            "optional_features": features,
+            "python": {
+                "status": "supported" if sys.version_info >= (3, 12) else "unsupported",
+                "version": ".".join(str(part) for part in sys.version_info[:3]),
+            },
+            "status": "ok",
+            "workspace": workspace_status,
+        }
+        missing = sorted(
+            feature
+            for feature in set(args.required_features)
+            if not features[feature]["available"]
+        )
+        if missing:
+            report["status"] = "missing_required_features"
+            report["missing_required_features"] = missing
+        _emit(report)
+        if missing:
+            raise RuntimeError(
+                "required optional feature(s) unavailable: " + ", ".join(missing)
+            )
+        return
+
     if args.command == "validate":
         parsed = read_jsonl(
             args.input,
@@ -522,6 +610,9 @@ def _run(args: argparse.Namespace) -> None:
                 max_request_bytes=args.max_input_bytes + 262_144,
                 max_admitted_jobs=args.queue_capacity,
                 worker_batch_size=args.worker_batch_size,
+                login_account_limit=args.login_account_limit,
+                login_source_limit=args.login_source_limit,
+                login_window_seconds=args.login_window_seconds,
             ),
             predictors,
         )

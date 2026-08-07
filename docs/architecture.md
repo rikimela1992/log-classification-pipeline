@@ -25,7 +25,7 @@ publication path.
 | ui.py | Build an optional localhost Gradio interface | No launch or dependency import until explicitly requested |
 | workspace.py | Persist versioned job states with local users, roles, sessions, retention, worker capabilities, and audit | Deny before prediction; apply state transitions and terminal results atomically |
 | web/worker.py | Run a bounded, single-worker, in-memory queue behind a process lock | Keep raw bytes out of SQLite, cancel between chunks, and fail interrupted work without partial results |
-| web/app.py / web/i18n.py | Provide an authenticated loopback API and localized server-rendered UI | Authenticate, authorize, check CSRF, validate catalogs, and enforce request limits before parsing uploads or invoking a predictor |
+| web/app.py / web/i18n.py / web/rate_limit.py | Provide an authenticated loopback API and localized server-rendered UI | Throttle failed login attempts, authenticate, authorize, check CSRF, validate catalogs, and enforce request limits before parsing uploads or invoking a predictor |
 
 ## Processing sequence
 
@@ -89,7 +89,10 @@ origins, and keeps API bearer authentication separate from UI cookie sessions.
 It uses one bounded process-local queue, one predictor worker, and an exclusive
 workspace lock file. A second instance cannot recover or execute the first
 instance's active jobs. Polling reads a dedicated status projection and does
-not append audit events. This is not a remote deployment architecture.
+not append audit events. Login failures are bounded by account and direct-source
+sliding windows whose keys are process-secret digests; the limiter is bounded,
+shared by API and UI, and resets on restart. This is not a remote deployment
+architecture.
 
 ## Model boundary
 

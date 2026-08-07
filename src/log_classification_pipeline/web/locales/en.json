@@ -13,6 +13,7 @@
   "login.submit": "Sign in",
   "login.invalid": "Invalid credentials.",
   "login.expired": "Login request expired. Try again.",
+  "login.rate_limited": "Too many failed login attempts. Wait briefly and try again.",
   "dashboard.title": "Dashboard",
   "dashboard.eyebrow": "Consult and export",
   "dashboard.heading": "Classification workspace",

@@ -52,6 +52,50 @@ class WorkspaceCliTests(unittest.TestCase):
         )
         self.assertTrue(all(item["experimental"] for item in catalog["items"]))
 
+    def test_doctor_reports_core_optional_features_and_workspace(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            database = Path(raw_directory) / "workspace.sqlite3"
+            status, _, errors = self.run_cli(
+                ["workspace", "init", str(database), "sample-org", "owner"],
+                [PASSWORD, PASSWORD],
+            )
+            self.assertEqual(status, 0, errors)
+
+            status, output, errors = self.run_cli(
+                ["doctor", "--database", str(database)],
+                [],
+            )
+
+        self.assertEqual(status, 0, errors)
+        report = json.loads(output)
+        self.assertEqual(report["status"], "ok")
+        self.assertEqual(report["maturity"], "alpha")
+        self.assertEqual(report["python"]["status"], "supported")
+        self.assertEqual(report["core"]["model_profiles"], 5)
+        self.assertEqual(report["workspace"], {"checked": True, "status": "ok"})
+        self.assertEqual(set(report["optional_features"]), {"ml", "ui", "web"})
+        self.assertNotIn(str(database), output)
+
+    def test_doctor_can_require_an_optional_feature(self) -> None:
+        with mock.patch(
+            "log_classification_pipeline.cli.importlib.util.find_spec",
+            return_value=None,
+        ):
+            status, output, errors = self.run_cli(
+                ["doctor", "--require", "web"],
+                [],
+            )
+
+        self.assertEqual(status, 2)
+        self.assertEqual(
+            json.loads(output)["missing_required_features"],
+            ["web"],
+        )
+        self.assertEqual(
+            errors.strip(),
+            "error: required optional feature(s) unavailable: web",
+        )
+
     def test_initialize_classify_list_show_and_policy_flow(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)

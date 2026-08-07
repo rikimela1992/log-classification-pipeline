@@ -11,8 +11,8 @@ workflow, **not** a production security assessment or penetration test.
 
 | Check | Result |
 | --- | --- |
-| Complete suite with `web` and `test` extras | 151 tests passed |
-| Core-only environment | 127 tests passed; 24 web tests intentionally skipped |
+| Complete suite with `web` and `test` extras | 157 tests passed |
+| Core-only environment | 129 tests passed; 28 web tests intentionally skipped |
 | Python/TOML parsing | passed |
 | `git diff --check` | passed |
 | Local wheel build | passed |
@@ -24,6 +24,8 @@ The web integration cases cover:
 - strict Host validation, no CORS opt-in, security headers, and HTTPS-only HSTS;
 - bearer-only API authentication, ambiguous cookie/bearer rejection, logout,
   and server-side session revocation;
+- privacy-minimal account and direct-source login throttling shared by API and
+  browser flows, with `429` and `Retry-After` responses;
 - pre-session and session-bound CSRF plus exact Origin checks for
   state-changing UI requests;
 - viewer denial before upload parsing and predictor invocation;
@@ -77,8 +79,9 @@ release.
 
 ## Residual limitations
 
-- The server is supported only on loopback and has no brute-force rate limiter,
-  TLS termination, reverse-proxy trust, or remote deployment profile.
+- The server is supported only on loopback. Its login limiter is process-local
+  and resets on restart; there is no distributed rate limit, TLS termination,
+  reverse-proxy trust, or remote deployment profile.
 - SQLite and the in-process predictor are not isolation boundaries.
 - Queue source bytes are transient but can still be exposed through process
   memory, swap, core dumps, or the owning OS account. They are not durable and

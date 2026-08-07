@@ -13,6 +13,7 @@
   "login.submit": "Accedi",
   "login.invalid": "Credenziali non valide.",
   "login.expired": "Richiesta di accesso scaduta. Riprova.",
+  "login.rate_limited": "Troppi tentativi di accesso non riusciti. Attendi brevemente e riprova.",
   "dashboard.title": "Pannello",
   "dashboard.eyebrow": "Consulta ed esporta",
   "dashboard.heading": "Workspace di classificazione",

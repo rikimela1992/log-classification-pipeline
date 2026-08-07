@@ -36,6 +36,7 @@ document.addEventListener("submit", async (event) => {
         const problem = await response.json();
         const localized = {
           invalid_credentials: document.body.dataset.errorInvalidCredentials,
+          login_rate_limited: document.body.dataset.errorLoginRateLimited,
           input_too_large: document.body.dataset.errorInputTooLarge,
           request_too_large: document.body.dataset.errorInputTooLarge,
           model_busy: document.body.dataset.errorModelBusy,

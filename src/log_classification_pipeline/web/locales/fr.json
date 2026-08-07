@@ -13,6 +13,7 @@
   "login.submit": "Connexion",
   "login.invalid": "Identifiants invalides.",
   "login.expired": "La demande de connexion a expiré. Réessayez.",
+  "login.rate_limited": "Trop de tentatives de connexion ont échoué. Patientez un instant puis réessayez.",
   "dashboard.title": "Tableau de bord",
   "dashboard.eyebrow": "Consulter et exporter",
   "dashboard.heading": "Espace de classification",
