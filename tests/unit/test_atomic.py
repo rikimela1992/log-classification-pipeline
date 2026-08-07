@@ -6,9 +6,11 @@ from pathlib import Path
 from unittest import mock
 
 from log_classification_pipeline.atomic import (
+    PublicationCleanupError,
     PublicationDurabilityError,
     atomic_write_jsonl,
 )
+from log_classification_pipeline.contracts import PredictionContractError
 
 
 class AtomicWriteTests(unittest.TestCase):
@@ -27,7 +29,7 @@ class AtomicWriteTests(unittest.TestCase):
                 '{"id":1}',
                 '{"id":2}',
             ])
-            self.assertEqual(destination.stat().st_mode & 0o777, 0o640)
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o600)
             self.assertEqual(self._temporary_files(directory, destination), [])
 
     def test_failure_keeps_existing_output_byte_identical(self) -> None:
@@ -81,6 +83,75 @@ class AtomicWriteTests(unittest.TestCase):
 
             self.assertFalse(destination.exists())
             self.assertEqual(self._temporary_files(directory, destination), [])
+
+    def test_non_serializable_output_raises_contract_error(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            destination = directory / "output.jsonl"
+
+            with self.assertRaisesRegex(PredictionContractError, "not JSON serializable"):
+                atomic_write_jsonl(destination, [{"value": object()}])
+
+            self.assertFalse(destination.exists())
+            self.assertEqual(self._temporary_files(directory, destination), [])
+
+    def test_invalid_mode_is_rejected_before_creating_output(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            destination = directory / "output.jsonl"
+
+            for invalid_mode in (True, -1, 0o1000, 1.5):
+                with self.subTest(mode=invalid_mode):
+                    with self.assertRaises(ValueError):
+                        atomic_write_jsonl(destination, [{"id": 1}], mode=invalid_mode)
+                    self.assertFalse(destination.exists())
+
+    def test_mode_failure_does_not_publish_or_leave_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            destination = directory / "output.jsonl"
+
+            with mock.patch(
+                "log_classification_pipeline.atomic.os.fchmod",
+                side_effect=OSError("mode failed"),
+            ):
+                with self.assertRaisesRegex(OSError, "mode failed"):
+                    atomic_write_jsonl(destination, [{"id": 1}])
+
+            self.assertFalse(destination.exists())
+            self.assertEqual(self._temporary_files(directory, destination), [])
+
+    def test_link_failure_does_not_publish_or_leave_temporary_file(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            destination = directory / "output.jsonl"
+
+            with mock.patch("log_classification_pipeline.atomic.os.link", side_effect=OSError("link failed")):
+                with self.assertRaisesRegex(OSError, "link failed"):
+                    atomic_write_jsonl(destination, [{"id": 1}])
+
+            self.assertFalse(destination.exists())
+            self.assertEqual(self._temporary_files(directory, destination), [])
+
+    def test_temporary_link_cleanup_failure_reports_committed_state(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            destination = directory / "output.jsonl"
+            original_unlink = Path.unlink
+
+            def fail_temporary_unlink(path, *args, **kwargs):
+                if path.name.startswith(f".{destination.name}."):
+                    raise OSError("cleanup failed")
+                return original_unlink(path, *args, **kwargs)
+
+            with mock.patch.object(Path, "unlink", new=fail_temporary_unlink):
+                with self.assertRaises(PublicationCleanupError) as raised:
+                    atomic_write_jsonl(destination, [{"id": 1}])
+
+            self.assertTrue(raised.exception.published)
+            self.assertTrue(destination.exists())
+            self.assertEqual(raised.exception.destination, destination)
+            self.assertEqual(len(self._temporary_files(directory, destination)), 1)
 
     def test_replace_failure_keeps_existing_output(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:

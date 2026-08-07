@@ -6,7 +6,11 @@ import unittest
 from pathlib import Path
 
 from log_classification_pipeline.batch import process_batch
-from log_classification_pipeline.contracts import BatchValidationError, PredictionContractError
+from log_classification_pipeline.contracts import (
+    BatchResourceLimitError,
+    BatchValidationError,
+    PredictionContractError,
+)
 
 
 class RecordingPredictor:
@@ -76,6 +80,55 @@ class BatchTests(unittest.TestCase):
                 process_batch(source, destination, lambda records: [{"only": "one"}])
 
             self.assertFalse(destination.exists())
+
+    def test_predictor_overproduction_is_consumed_only_to_first_excess(self) -> None:
+        consumed: list[int] = []
+
+        def overproducing_predictor(records):
+            for index in range(100):
+                consumed.append(index)
+                if len(consumed) > len(records) + 1:
+                    raise AssertionError("predictor output was consumed without a bound")
+                yield {"result": index}
+
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            source = self._input(directory, [{"message": "one"}, {"message": "two"}])
+            destination = directory / "output.jsonl"
+
+            with self.assertRaisesRegex(PredictionContractError, "count mismatch"):
+                process_batch(source, destination, overproducing_predictor)
+
+            self.assertEqual(len(consumed), 3)
+            self.assertFalse(destination.exists())
+
+    def test_configured_input_limit_stops_before_predictor(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            source = self._input(directory, [{"message": "one"}, {"message": "two"}])
+            destination = directory / "output.jsonl"
+            predictor = RecordingPredictor()
+
+            with self.assertRaises(BatchResourceLimitError):
+                process_batch(source, destination, predictor, max_records=1)
+
+            self.assertEqual(predictor.calls, [])
+            self.assertFalse(destination.exists())
+
+    def test_output_mode_is_configurable(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            directory = Path(raw_directory)
+            source = self._input(directory, [{"message": "one"}])
+            destination = directory / "output.jsonl"
+
+            process_batch(
+                source,
+                destination,
+                RecordingPredictor(),
+                output_mode=0o640,
+            )
+
+            self.assertEqual(destination.stat().st_mode & 0o777, 0o640)
 
     def test_predictor_exception_leaves_no_output(self) -> None:
         def failing_predictor(records):

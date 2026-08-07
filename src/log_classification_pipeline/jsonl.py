@@ -8,7 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from .contracts import BatchValidationError, ValidationIssue, validate_input_record
+from .contracts import (
+    BatchResourceLimitError,
+    BatchValidationError,
+    ValidationIssue,
+    validate_input_record,
+)
 
 
 class _DuplicateKeyError(ValueError):
@@ -41,11 +46,36 @@ class ParsedBatch:
         return f"sha256:{self.source_sha256}"
 
 
-def read_jsonl(path: str | Path) -> ParsedBatch:
+def _validate_limit(name: str, value: int | None) -> None:
+    if value is not None and (
+        isinstance(value, bool) or not isinstance(value, int) or value <= 0
+    ):
+        raise ValueError(f"{name} must be a positive integer or None")
+
+
+def read_jsonl(
+    path: str | Path,
+    *,
+    max_input_bytes: int | None = None,
+    max_records: int | None = None,
+) -> ParsedBatch:
     """Read and validate an entire JSONL file before returning any records."""
 
+    _validate_limit("max_input_bytes", max_input_bytes)
+    _validate_limit("max_records", max_records)
+
     source_path = Path(path)
-    payload = source_path.read_bytes()
+    with source_path.open("rb") as stream:
+        if max_input_bytes is None:
+            payload = stream.read()
+        else:
+            payload = stream.read(max_input_bytes + 1)
+    if max_input_bytes is not None and len(payload) > max_input_bytes:
+        raise BatchResourceLimitError(
+            "input byte count",
+            max_input_bytes,
+            observed_at_least=len(payload),
+        )
     digest = hashlib.sha256(payload).hexdigest()
 
     try:
@@ -60,11 +90,24 @@ def read_jsonl(path: str | Path) -> ParsedBatch:
     issues: list[ValidationIssue] = []
     blank_lines = 0
 
-    for line_number, raw_line in enumerate(text.splitlines(), start=1):
+    raw_lines = text.split("\n")
+    if raw_lines and raw_lines[-1] == "":
+        raw_lines.pop()
+
+    non_blank_lines = 0
+    for line_number, raw_line in enumerate(raw_lines, start=1):
         if not raw_line.strip():
             blank_lines += 1
             continue
 
+        non_blank_lines += 1
+        if max_records is not None and non_blank_lines > max_records:
+            raise BatchResourceLimitError(
+                "record count",
+                max_records,
+                observed_at_least=non_blank_lines,
+                line_number=line_number,
+            )
         try:
             value = json.loads(
                 raw_line,

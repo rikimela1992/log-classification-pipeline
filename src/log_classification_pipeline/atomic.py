@@ -9,7 +9,7 @@ from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
-from .contracts import validate_prediction_record
+from .contracts import PredictionContractError, validate_prediction_record
 
 
 class PublicationCommittedError(RuntimeError):
@@ -45,7 +45,7 @@ def atomic_write_jsonl(
     records: Iterable[Mapping[str, Any]],
     *,
     overwrite: bool = False,
-    mode: int = 0o640,
+    mode: int = 0o600,
 ) -> int:
     """Write complete JSONL output and publish it atomically.
 
@@ -54,6 +54,14 @@ def atomic_write_jsonl(
     durability or cleanup failures raise a ``PublicationCommittedError`` subtype
     whose ``published`` attribute is true; rollback is no longer possible.
     """
+
+    if (
+        isinstance(mode, bool)
+        or not isinstance(mode, int)
+        or mode < 0
+        or mode > 0o777
+    ):
+        raise ValueError("mode must be an integer between 0o000 and 0o777")
 
     destination = Path(path)
     parent = destination.parent
@@ -78,19 +86,24 @@ def atomic_write_jsonl(
         with os.fdopen(file_descriptor, "w", encoding="utf-8", newline="\n") as stream:
             for output_index, raw_record in enumerate(records, start=1):
                 record = validate_prediction_record(raw_record, output_index)
-                encoded = json.dumps(
-                    dict(record),
-                    ensure_ascii=False,
-                    separators=(",", ":"),
-                    allow_nan=False,
-                )
+                try:
+                    encoded = json.dumps(
+                        dict(record),
+                        ensure_ascii=False,
+                        separators=(",", ":"),
+                        allow_nan=False,
+                    )
+                except (TypeError, ValueError) as exc:
+                    raise PredictionContractError(
+                        f"prediction {output_index} is not JSON serializable: {exc}"
+                    ) from exc
                 stream.write(encoded)
                 stream.write("\n")
                 count += 1
             stream.flush()
+            os.fchmod(stream.fileno(), mode)
             os.fsync(stream.fileno())
 
-        os.chmod(temporary_path, mode)
         if overwrite:
             os.replace(temporary_path, destination)
         else:

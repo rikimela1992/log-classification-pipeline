@@ -31,6 +31,33 @@ class BatchValidationError(ValueError):
         super().__init__(f"batch validation failed: {details}")
 
 
+class BatchResourceLimitError(BatchValidationError):
+    """Raised when an input exceeds a configured resource limit."""
+
+    def __init__(
+        self,
+        resource: str,
+        limit: int,
+        *,
+        observed_at_least: int,
+        line_number: int | None = None,
+    ):
+        self.resource = resource
+        self.limit = limit
+        self.observed_at_least = observed_at_least
+        super().__init__(
+            [
+                ValidationIssue(
+                    reason=(
+                        f"{resource} limit exceeded: maximum {limit}, "
+                        f"observed at least {observed_at_least}"
+                    ),
+                    line_number=line_number,
+                )
+            ]
+        )
+
+
 class PredictionContractError(ValueError):
     """Raised when a predictor violates the one-input/one-output contract."""
 

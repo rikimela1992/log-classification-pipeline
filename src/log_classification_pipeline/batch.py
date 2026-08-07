@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from itertools import islice
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -47,6 +48,9 @@ def process_batch(
     *,
     batch_size: int = 64,
     overwrite: bool = False,
+    max_input_bytes: int | None = None,
+    max_records: int | None = None,
+    output_mode: int = 0o600,
 ) -> BatchSummary:
     """Validate, predict, and atomically publish one complete batch."""
 
@@ -62,7 +66,11 @@ def process_batch(
     if destination.exists() and not overwrite:
         raise FileExistsError(f"output already exists: {destination}")
 
-    parsed = read_jsonl(source)
+    parsed = read_jsonl(
+        source,
+        max_input_bytes=max_input_bytes,
+        max_records=max_records,
+    )
 
     def predictions():
         output_index = 0
@@ -76,13 +84,16 @@ def process_batch(
                     f"predictor returned a non-iterable result for records {offset + 1}-"
                     f"{offset + len(chunk)}"
                 ) from exc
-            predicted_chunk = list(iterator)
+            predicted_chunk = list(islice(iterator, len(chunk) + 1))
 
             if len(predicted_chunk) != len(chunk):
+                observed = str(len(predicted_chunk))
+                if len(predicted_chunk) > len(chunk):
+                    observed = f"at least {observed}"
                 raise PredictionContractError(
                     "predictor output count mismatch for records "
                     f"{offset + 1}-{offset + len(chunk)}: expected {len(chunk)}, "
-                    f"got {len(predicted_chunk)}"
+                    f"got {observed}"
                 )
 
             for raw_prediction in predicted_chunk:
@@ -93,6 +104,7 @@ def process_batch(
         destination,
         predictions(),
         overwrite=overwrite,
+        mode=output_mode,
     )
 
     return BatchSummary(

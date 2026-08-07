@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
 
-from log_classification_pipeline.contracts import BatchValidationError
+from log_classification_pipeline.contracts import BatchResourceLimitError, BatchValidationError
 from log_classification_pipeline.jsonl import read_jsonl
 
 
@@ -75,6 +76,47 @@ class JsonlTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.issues[0].line_number, 2)
         self.assertIn("UTF-8", raised.exception.issues[0].reason)
+
+    def test_unicode_line_separators_inside_strings_are_not_jsonl_delimiters(self) -> None:
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            with self.subTest(separator=ord(separator)):
+                payload = (
+                    json.dumps(
+                        {"message": f"left{separator}right"},
+                        ensure_ascii=False,
+                    ).encode("utf-8")
+                    + b"\n"
+                )
+                with tempfile.TemporaryDirectory() as raw_directory:
+                    parsed = read_jsonl(self._write(Path(raw_directory), payload))
+                self.assertEqual(parsed.records[0]["message"], f"left{separator}right")
+
+    def test_input_limits_accept_boundary_and_reject_first_excess(self) -> None:
+        payload = b'{"message":"one"}\n{"message":"two"}\n'
+        with tempfile.TemporaryDirectory() as raw_directory:
+            path = self._write(Path(raw_directory), payload)
+
+            parsed = read_jsonl(path, max_input_bytes=len(payload), max_records=2)
+            self.assertEqual(len(parsed.records), 2)
+
+            with self.assertRaises(BatchResourceLimitError) as byte_error:
+                read_jsonl(path, max_input_bytes=len(payload) - 1)
+            self.assertEqual(byte_error.exception.resource, "input byte count")
+
+            with self.assertRaises(BatchResourceLimitError) as record_error:
+                read_jsonl(path, max_records=1)
+            self.assertEqual(record_error.exception.resource, "record count")
+            self.assertEqual(record_error.exception.issues[0].line_number, 2)
+
+    def test_invalid_input_limit_configuration_is_rejected(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            path = self._write(Path(raw_directory), b'{"message":"one"}\n')
+            for invalid_limit in (0, -1, True, 1.5):
+                with self.subTest(limit=invalid_limit):
+                    with self.assertRaises(ValueError):
+                        read_jsonl(path, max_input_bytes=invalid_limit)
+                    with self.assertRaises(ValueError):
+                        read_jsonl(path, max_records=invalid_limit)
 
 
 if __name__ == "__main__":

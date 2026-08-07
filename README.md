@@ -33,22 +33,7 @@ publishes output only after every result has passed validation.
 
 ## Architecture
 
-    Synthetic JSONL input
-            |
-            v
-    Strict UTF-8 and JSON parser
-            |
-            v
-    Whole-batch validation ---- failure ----> no predictor call, no output
-            |
-            v
-    Caller-supplied predictor in bounded chunks
-            |
-            v
-    One-input/one-output validation --------> no published output on failure
-            |
-            v
-    Temporary JSONL file -> flush -> fsync -> atomic publication -> directory fsync
+![Fail-closed batch pipeline](docs/assets/pipeline-overview.svg)
 
 The package is organized into strict JSONL parsing, input/output contracts,
 batch orchestration, and atomic publication helpers. See
@@ -64,20 +49,36 @@ invalid optional field types, and scalar top-level values are rejected.
 The complete input is parsed and validated before the predictor is called. The
 predictor must then return exactly one mapping for every input record. If any
 chunk fails or returns the wrong number of results, output publication does not
-start. This prevents silent partial results.
+start. Predictor iterables are consumed only through the first excess result,
+so cardinality checks do not materialize unbounded overproduction.
 
 Unknown fields are preserved and passed to the predictor. The caller remains
 responsible for data minimization before invoking the library.
 
+## Resource bounds
+
+`read_jsonl` and `process_batch` accept positive `max_input_bytes` and
+`max_records` limits. The byte limit is enforced while reading at most one
+byte beyond the boundary. The record limit counts non-blank JSONL lines and
+fails on the first excess line. Either failure occurs before predictor
+invocation.
+
+Limits default to `None` to avoid inventing an operational policy for callers
+in this alpha. Applications processing untrusted data should set both values;
+the package remains an in-memory batch foundation rather than a streaming
+parser.
+
 ## Atomic output publication
 
 Output is encoded into a temporary file in the destination directory. The file
-is flushed and synced before publication. By default, an existing destination
-is not replaced. The directory is synced after the destination becomes visible.
+is flushed and synced before publication. Output permissions default to
+`0o600` and can be changed explicitly with `output_mode`. By default, an
+existing destination is not replaced. The directory is synced after the
+destination becomes visible.
 
-Failures before publication remove the temporary file. Failures after the
-destination becomes visible raise a dedicated committed-publication exception,
-so callers are not told that an already visible output was rolled back.
+Failures before publication attempt to remove the temporary file. Failures
+after the destination becomes visible raise a dedicated committed-publication
+exception, so callers are not told that an already visible output was rolled back.
 
 ## Installation
 
@@ -104,7 +105,8 @@ failure and exits non-zero. It does not create output or call a predictor.
 
 The suite covers strict parsing, aggregate validation errors, predictor count
 mismatches, exceptions in later chunks, symlink and path aliases, overwrite
-behavior, atomic cleanup, and post-publication durability errors.
+behavior, resource-limit boundaries, Unicode JSONL separators, bounded predictor
+output, atomic cleanup, and post-publication durability errors.
 
 ## Security and privacy
 
@@ -121,7 +123,8 @@ behavior, atomic cleanup, and post-publication durability errors.
 ## Current limitations
 
 - There is no Transformers adapter, model loading, training, or inference CLI.
-- Input is read and validated in memory; no operational size limit is enforced.
+- Input is read and validated in memory. Resource limits are opt-in and no
+  default operational profile is claimed.
 - Atomicity and durability behavior is designed for local POSIX-like
   filesystems and is not claimed for every network filesystem or operating
   system.
@@ -133,7 +136,7 @@ behavior, atomic cleanup, and post-publication durability errors.
 
 ## Roadmap
 
-1. Add explicit input-size and record-count limits backed by reproducible tests.
+1. Define measured operational profiles and evaluate conservative default limits.
 2. Define a versioned predictor adapter contract.
 3. Add a Transformers adapter only after artifact provenance and offline
    reproducibility requirements are documented and tested.
