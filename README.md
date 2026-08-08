@@ -1,86 +1,108 @@
-# Log Classification Pipeline
+<p align="center">
+  <img src="docs/assets/project-mark.svg" width="104" alt="Log Classification Pipeline mark">
+</p>
 
-Local, fail-closed log classification with a browser dashboard, API, CLI, and
-exportable results.
+<h1 align="center">Log Classification Pipeline</h1>
 
-> **Alpha:** this project is not production-ready. It is designed for local,
-> bounded analysis and does not ship logs, datasets, model weights, or default
+<p align="center">
+  Turn local log files into structured, exportable findings through a browser
+  dashboard, API, or CLI.
+</p>
+
+<p align="center">
+  <a href="https://github.com/rikimela1992/log-classification-pipeline/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/rikimela1992/log-classification-pipeline/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/rikimela1992/log-classification-pipeline/releases"><img alt="Release" src="https://img.shields.io/github/v/release/rikimela1992/log-classification-pipeline?include_prereleases&sort=semver"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/rikimela1992/log-classification-pipeline"></a>
+  <img alt="Python 3.12 or newer" src="https://img.shields.io/badge/python-3.12%2B-3776AB">
+  <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange">
+</p>
+
+<p align="center">
+  <a href="#quick-start">Quick start</a> ·
+  <a href="https://github.com/rikimela1992/log-classification-pipeline/releases">Downloads</a> ·
+  <a href="#project-guide">Documentation</a> ·
+  <a href="SECURITY.md">Security</a>
+</p>
+
+> [!WARNING]
+> This is alpha software, not a production-ready SIEM. It is intended for
+> local, bounded analysis and ships no logs, datasets, model weights, or default
 > credentials.
 
-![Authenticated dashboard with synthetic data](docs/assets/dashboard-preview.png)
+<p align="center">
+  <a href="docs/assets/dashboard-preview.png">
+    <img src="docs/assets/dashboard-preview.png" alt="Authenticated dashboard showing synthetic classified log data" width="100%">
+  </a>
+  <br>
+  <sub>Authenticated local dashboard · synthetic data only</sub>
+</p>
 
-## What it does
+| Local by default | Fail closed | Multiple interfaces |
+| --- | --- | --- |
+| Loopback-only browser app, local SQLite workspace, and offline rules baseline. | The whole input and every prediction must pass validation before a batch is published. | Use the dashboard, automate through the API, or integrate the Python CLI. |
 
-- Accepts `.jsonl`, `.ndjson`, `.txt`, `.log`, and `.csv` files.
-- Validates the complete file before classification starts.
-- Classifies subsystem and severity without copying the source message into the
-  result.
-- Provides an authenticated local dashboard with admin, analyst, and viewer
-  roles.
-- Supports English, Italian, French, and Spanish in the browser interface.
-- Exports completed results and records privacy-minimal audit events.
-- Publishes a batch only when every input and prediction passes validation.
+## Quick start
 
-The default rules adapter works offline and requires no model download.
-Experimental zero-shot model profiles are available separately for English and
-multilingual analysis.
+Download **[v0.1.0-alpha.1](https://github.com/rikimela1992/log-classification-pipeline/releases/tag/v0.1.0-alpha.1)** for 64-bit Linux:
 
-## Install on Linux
-
-Download the preferred file from [GitHub Releases](https://github.com/rikimela1992/log-classification-pipeline/releases):
-
-| Package | Intended use |
+| Package | Best for |
 | --- | --- |
-| AppImage | Portable desktop launch |
-| `.deb` | Ubuntu 24.04+ and Debian 13 |
-| `.rpm` | Fedora 41+ |
-| `.tar.gz` | Portable archive or server setup |
+| **AppImage** | Portable desktop use |
+| **`.deb`** | Ubuntu 24.04+ or Debian 13 |
+| **`.rpm`** | Fedora 41+ |
+| **`.tar.gz`** | Portable or server setup |
 
-The first desktop launch guides you through creating a private workspace,
-administrator account, and password. The application then opens locally at
-`http://127.0.0.1:8080/app`.
+DEB and RPM packages add a desktop launcher. On first launch, a guided setup
+creates a private workspace, administrator account, and password, then opens
+the app locally.
 
-Packages contain the web workspace and offline rules baseline, but no model,
-tokenizer, Transformers, PyTorch, or dataset. Alpha artifacts have SHA-256
-checksums and SBOMs but are not cryptographically signed.
+Packages include the web workspace and offline rules baseline. They do **not**
+include a model, tokenizer, Transformers, PyTorch, or dataset. See the
+[Linux install guide](docs/linux-packages.md) for checksum verification,
+AppImage permissions, and optional systemd setup.
 
-See [Linux packages](docs/linux-packages.md) for installation, checksum
-verification, and optional systemd activation.
+## What it handles
 
-## Input formats
-
-| Format | Expected content |
+| Input | Contract |
 | --- | --- |
-| JSONL / NDJSON | One JSON object per line with a non-blank `message` field |
+| JSONL / NDJSON | One object per line with a non-blank `message` field |
 | TXT / LOG | One message per non-blank line |
-| CSV | A unique header containing the exact `message` column |
+| CSV | One unique column named exactly `message` |
 
-Quoted CSV fields and embedded newlines are supported. The CLI and web app use
-an alpha limit of 25 MiB and 25,000 records per file; the local web queue admits
-at most 50 MiB across running and queued jobs.
+Quoted CSV fields and embedded newlines are supported. Each file is limited to
+25 MiB and 25,000 records; the local web queue admits 50 MiB total across active
+and queued jobs.
+
+The dashboard is available in English, Italian, French, and Spanish. Local
+accounts have separate admin, analyst, and viewer roles. Completed findings can
+be consulted and exported without copying the original message into each
+prediction record.
+
+## How it works
 
 Malformed input, invalid UTF-8, duplicate JSON keys, inconsistent CSV rows,
-predictor failures, and result-count mismatches fail closed. No partial result
-is published.
+predictor failures, and result-count mismatches stop the batch. No partial
+destination is published.
 
 ![Fail-closed batch pipeline](docs/assets/pipeline-overview.svg)
 
-## Models
+## Choose a classification engine
 
-`rules` is the safe initial choice: deterministic, offline, and bundled.
-Optional profiles include a pinned English DeBERTa NLI encoder and experimental
-multilingual encoders covering English, Italian, French, and Spanish.
+| Profile | Purpose | Included |
+| --- | --- | --- |
+| `rules` | Deterministic offline baseline and safest first run | Yes |
+| English DeBERTa | Experimental zero-shot classification | No |
+| Multilingual NLI | Experimental English, Italian, French, and Spanish analysis | No |
 
 Model downloads are disabled by default. Local model directories require a
-verified manifest and remain outside this repository. Current multilingual
-results are development measurements, not accuracy or production claims.
+verified manifest and stay outside the repository. Published evaluations are
+development measurements, not accuracy or production claims. Read
+[model selection](docs/model-selection.md) and the
+[multilingual evaluation](docs/results/2026-08-07-multilingual-model-evaluation.md).
 
-See [model selection](docs/model-selection.md) and
-[evaluation results](docs/results/2026-08-07-multilingual-model-evaluation.md).
+## For developers
 
-## Python and development
-
-Python 3.12 or newer is required.
+Python 3.12+ is required. The smallest local setup uses no downloaded model:
 
 ```console
 python3 -m venv .venv
@@ -88,60 +110,35 @@ python3 -m venv .venv
 .venv/bin/log-classify doctor
 ```
 
-Install the authenticated web interface and initialize a workspace:
+Install the optional authenticated web interface with `.[web]`. Passwords are
+prompted interactively and never accepted as command-line arguments. See
+[the test guide](tests/README.md) for the development workflow and coverage.
 
-```console
-.venv/bin/python -m pip install '.[web]'
-.venv/bin/log-classify workspace init ./state/workspace.sqlite3 sample-org owner
-.venv/bin/log-classify web ./state/workspace.sqlite3
-```
+## Project guide
 
-Passwords are prompted interactively and are never accepted as command-line
-arguments.
-
-Run the full test suite:
-
-```console
-PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
-  python3 -m unittest discover -s tests -v
-```
-
-Validate the included synthetic examples without invoking a model:
-
-```console
-PYTHONPATH=src python3 examples/validate.py examples/input-valid.jsonl
-PYTHONPATH=src python3 examples/validate.py examples/input-invalid.jsonl
-```
-
-## Documentation
-
-| Topic | Document |
+| Read about | Document |
 | --- | --- |
-| Architecture and atomic publication | [Architecture](docs/architecture.md) |
-| Local accounts, roles, retention, and export | [Local workspace](docs/local-workspace.md) |
-| Browser UI, API, queue, and security boundaries | [Web workspace](docs/web-workspace.md) |
-| Linux packages and first launch | [Linux packages](docs/linux-packages.md) |
+| Installers and first launch | [Linux packages](docs/linux-packages.md) |
+| Browser app, API, and security boundaries | [Web workspace](docs/web-workspace.md) |
+| Accounts, roles, retention, and export | [Local workspace](docs/local-workspace.md) |
+| Fail-closed design and atomic publication | [Architecture](docs/architecture.md) |
 | Model profiles and artifact verification | [Model selection](docs/model-selection.md) |
-| Security reporting | [Security policy](SECURITY.md) |
-| Measured validation evidence | [Results](docs/results/) |
+| Measured evidence | [Results](docs/results/) |
 
-## Security and limitations
+## Current boundaries
 
-- The browser and API bind only to loopback; remote deployment is unsupported.
-- The SQLite workspace is local and supports one organization per database.
-- Inputs are processed in memory and the predictor runs in-process.
-- The queue and login limiter are process-local and reset on restart.
-- The database is not encrypted and secure deletion cannot cover backups,
-  snapshots, swap, or copy-on-write storage.
-- Zero-shot scores are experimental and are not calibrated probabilities.
-- Atomic publication targets local POSIX-like filesystems.
-- Production hardening, load testing, SSO, distributed workers, and an
-  independent security review are still pending.
+- Local use only: remote deployment is unsupported.
+- The SQLite workspace is unencrypted and limited to one organization.
+- Inputs are processed in memory; predictors run in-process.
+- Queue state and login rate limits reset when the process restarts.
+- Zero-shot scores are experimental and not calibrated probabilities.
+- Production hardening, load testing, SSO, distributed workers, signed packages,
+  and an independent security review remain future work.
 
-All examples and screenshots use synthetic data. Do not add real logs,
+All examples and screenshots use synthetic data. Please do not add real logs,
 credentials, infrastructure identifiers, model weights, or operational
 configuration to this repository.
 
 ## License
 
-[MIT License](LICENSE) — Copyright (c) 2026 Riccardo Melini.
+[MIT](LICENSE) © 2026 Riccardo Melini.
