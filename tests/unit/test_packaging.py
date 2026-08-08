@@ -22,6 +22,14 @@ class CloudDevelopmentEnvironmentTests(unittest.TestCase):
         )
         self.assertNotIn("forwardPorts", config)
         self.assertEqual(
+            config["features"],
+            {
+                "ghcr.io/devcontainers/features/sshd:1": {
+                    "version": "latest"
+                }
+            },
+        )
+        self.assertEqual(
             config["postCreateCommand"], ".devcontainer/post-create.sh"
         )
 

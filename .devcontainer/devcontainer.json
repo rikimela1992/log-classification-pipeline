@@ -7,6 +7,11 @@
     "storage": "16gb"
   },
   "postCreateCommand": ".devcontainer/post-create.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/sshd:1": {
+      "version": "latest"
+    }
+  },
   "remoteEnv": {
     "PIP_DISABLE_PIP_VERSION_CHECK": "1",
     "PYTHONDONTWRITEBYTECODE": "1"
