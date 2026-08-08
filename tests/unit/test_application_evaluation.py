@@ -12,11 +12,17 @@ from log_classification_pipeline.application import (
     classify_file_preview,
     classify_message,
 )
-from log_classification_pipeline.contracts import PredictionContractError
-from log_classification_pipeline.contracts import BatchResourceLimitError
+from log_classification_pipeline.contracts import (
+    BatchResourceLimitError,
+    PredictionContractError,
+)
 from log_classification_pipeline.evaluation import evaluate_records
 from log_classification_pipeline.jsonl import read_jsonl
-from log_classification_pipeline.taxonomy import SEVERITY_LABELS, SUBSYSTEM_LABELS, TAXONOMY_VERSION
+from log_classification_pipeline.taxonomy import (
+    SEVERITY_LABELS,
+    SUBSYSTEM_LABELS,
+    TAXONOMY_VERSION,
+)
 from log_classification_pipeline.workspace import AuthorizationError, Role, Workspace
 
 

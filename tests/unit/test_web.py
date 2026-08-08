@@ -43,7 +43,6 @@ from log_classification_pipeline.cli import main
 from log_classification_pipeline.model_profiles import MULTILINGUAL_PROFILE_ID
 from log_classification_pipeline.workspace import AuthenticationError, Role, Workspace
 
-
 PASSWORD = "correct-horse-battery-staple"
 
 
@@ -255,7 +254,7 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(api.json()["code"], "invalid_request")
 
     def test_locale_cookie_change_is_csrf_protected_and_bounded(self) -> None:
-        page = self.client.get("/app/login")
+        self.client.get("/app/login")
         csrf = self.client.cookies.get("lcp_login_csrf")
         self.assertIsNotNone(csrf)
 
@@ -364,7 +363,7 @@ class WebApplicationTests(unittest.TestCase):
             self.assertEqual(still_limited.status_code, 429)
             self.assertEqual(login.call_count, 2)
 
-            login_page = self.client.get(
+            self.client.get(
                 "/app/login",
                 headers={"Accept-Language": "it"},
             )

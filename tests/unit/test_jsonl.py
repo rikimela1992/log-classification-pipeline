@@ -6,7 +6,10 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from log_classification_pipeline.contracts import BatchResourceLimitError, BatchValidationError
+from log_classification_pipeline.contracts import (
+    BatchResourceLimitError,
+    BatchValidationError,
+)
 from log_classification_pipeline.jsonl import read_jsonl
 
 

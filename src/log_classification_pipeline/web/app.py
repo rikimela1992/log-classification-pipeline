@@ -8,8 +8,8 @@ import os
 import secrets
 import sqlite3
 import tempfile
-from contextlib import asynccontextmanager
 from collections.abc import Mapping
+from contextlib import asynccontextmanager
 from dataclasses import asdict, dataclass
 from http.cookies import SimpleCookie
 from pathlib import Path
@@ -24,8 +24,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
-from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from ..batch import Predictor
@@ -40,6 +40,9 @@ from ..defaults import (
     DEFAULT_MAX_RECORDS,
 )
 from ..inputs import InputFormat, read_input_file, resolve_input_format
+from ..jsonl import ParsedBatch
+from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
+from ..model_profiles import MODEL_PROFILES
 from ..workspace import (
     AuthenticationError,
     AuthorizationError,
@@ -50,9 +53,6 @@ from ..workspace import (
     Workspace,
     WorkspaceError,
 )
-from ..jsonl import ParsedBatch
-from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
-from ..model_profiles import MODEL_PROFILES
 from .i18n import SUPPORTED_LOCALES, load_catalogs, negotiate_locale, translator
 from .rate_limit import LoginRateLimiter
 from .worker import (
@@ -60,7 +60,6 @@ from .worker import (
     QueueCapacityError,
     WorkerUnavailableError,
 )
-
 
 _SESSION_COOKIE = "lcp_session"
 _LOGIN_CSRF_COOKIE = "lcp_login_csrf"

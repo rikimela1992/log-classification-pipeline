@@ -14,7 +14,6 @@ from typing import Any, Iterator
 
 from .model_profiles import get_model_profile
 
-
 MANIFEST_SCHEMA_VERSION = 1
 MAX_MANIFEST_BYTES = 1_048_576
 MAX_MODEL_FILES = 2_048

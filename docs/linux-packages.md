@@ -67,16 +67,27 @@ outside the supported alpha profile.
 
 ## Integrity and inventory
 
-The final workflow artifact includes `SHA256SUMS`, dependency lock snapshots,
+The final workflow artifact includes `SHA256SUMS`, `SHA256SUMS.full`, dependency
+lock snapshots,
 a CycloneDX Python-runtime inventory, a Syft-generated SPDX inventory of the
 frozen bundle and native libraries, embedded Python dependency license texts,
 the pinned CPython license, and native-library license evidence collected from
 the build distribution. For RPM dependencies that install no standalone
 license text, the evidence records the package, source RPM, and declared
-license expression. Verify all downloaded files before installation:
+license expression. `SHA256SUMS` contains only the four public packages, so it
+works after downloading the assets from a GitHub release. `SHA256SUMS.full`
+covers every inventory, lock snapshot, license record, and package in the
+complete workflow artifact. Verify release packages before installation:
 
 ```console
 sha256sum --check --strict SHA256SUMS
+```
+
+Release candidates produced after this hardening also carry a GitHub artifact
+provenance attestation. Verify a downloaded package against this repository:
+
+```console
+gh attestation verify ./PACKAGE --repo rikimela1992/log-classification-pipeline
 ```
 
 The AppImage builder and type-2 runtime are fetched from fixed GitHub release
@@ -85,9 +96,9 @@ GitHub Actions are pinned to commit SHAs. Package CI smoke-tests the frozen web
 runtime and inspects or extracts every package format before a candidate is
 accepted.
 
-These alpha candidates are checksummed but are not yet cryptographically
-signed. Confirm that an archive came from the intended GitHub Actions run, then
-verify `SHA256SUMS`, before installing or launching it.
+The packages are not signed with a maintainer-managed release key. Their GitHub
+artifact attestations use Sigstore-backed provenance; verify both provenance
+and `SHA256SUMS` before installing or launching a new candidate.
 
 ## Building a candidate
 

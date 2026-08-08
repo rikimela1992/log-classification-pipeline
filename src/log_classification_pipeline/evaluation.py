@@ -8,9 +8,8 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .batch import Predictor
-from .taxonomy import SEVERITY_LABELS, SUBSYSTEM_LABELS
 from .prediction import validate_classification_prediction
-
+from .taxonomy import SEVERITY_LABELS, SUBSYSTEM_LABELS
 
 _SUPPORTED_FIXTURE_LANGUAGES = ("en", "it", "fr", "es")
 

@@ -22,7 +22,6 @@ from log_classification_pipeline.workspace import (
     Workspace,
 )
 
-
 NOW = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
 PASSWORD = "correct-horse-battery-staple"
 

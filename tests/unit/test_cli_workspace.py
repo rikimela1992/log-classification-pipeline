@@ -10,7 +10,6 @@ from unittest import mock
 
 from log_classification_pipeline.cli import main
 
-
 PASSWORD = "correct-horse-battery-staple"
 
 

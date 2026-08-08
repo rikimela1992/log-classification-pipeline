@@ -806,7 +806,8 @@ class Workspace:
                 )
         if authentication_failed:
             raise AuthenticationError("invalid credentials")
-        assert token is not None and principal is not None
+        if token is None or principal is None:
+            raise AuthenticationError("invalid credentials")
         return token, principal
 
     def principal(self, token: str, *, now: datetime | None = None) -> Principal:

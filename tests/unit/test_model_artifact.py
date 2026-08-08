@@ -17,15 +17,18 @@ from log_classification_pipeline.adapters.zero_shot import (
 )
 from log_classification_pipeline.cli import _build_predictor, _parser, main
 from log_classification_pipeline.model_artifact import (
-    ArtifactManifestError,
     MAX_MODEL_BYTES,
     MAX_MODEL_FILES,
+    ArtifactManifestError,
     create_artifact_manifest,
     materialize_verified_artifact,
     verify_artifact_manifest,
 )
 from log_classification_pipeline.model_catalog import configured_model_catalog
-from log_classification_pipeline.model_profiles import ENGLISH_PROFILE_ID, get_model_profile
+from log_classification_pipeline.model_profiles import (
+    ENGLISH_PROFILE_ID,
+    get_model_profile,
+)
 
 
 class ModelArtifactTests(unittest.TestCase):
