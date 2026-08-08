@@ -1,376 +1,147 @@
 # Log Classification Pipeline
 
-## Project status
+Local, fail-closed log classification with a browser dashboard, API, CLI, and
+exportable results.
 
-This repository contains the alpha batch-processing foundation for a future log
-classification pipeline. It is **not production-ready**. The planned first
-release is `v0.1.0-alpha.1`, titled **Fail-closed batch-processing foundation**.
-The project is available under the [MIT License](LICENSE).
-
-All examples and test records are synthetic. This repository includes no model,
-checkpoint, tokenizer, dataset, production log, or operational configuration.
-An optional, offline-first zero-shot adapter is included, but model artifacts
-remain outside the repository.
-
-## Problem
-
-Batch classifiers can create dangerous ambiguity when they skip malformed
-records, publish partial output, or report success after processing only part of
-an input. Downstream automation may then treat incomplete results as complete.
-
-This foundation establishes a strict boundary before a model adapter is called.
-It validates the entire input, enforces a one-input/one-output contract, and
-publishes output only after every result has passed validation.
-
-## Design goals
-
-- Fail closed on malformed input or predictor contract violations.
-- Never silently publish a partial batch.
-- Preserve the exact input identity with a SHA-256 digest.
-- Avoid overwriting existing output unless explicitly requested.
-- Make post-publication durability failures distinguishable from failures that
-  occur before a destination becomes visible.
-- Keep the core independent from any model framework.
-- Make the model adapter and local UI optional, lazy-loaded extras.
-- Emit privacy-minimal classifications without echoing input messages.
-
-## Architecture
-
-![Fail-closed batch pipeline](docs/assets/pipeline-overview.svg)
-
-The package is organized into bounded JSONL, NDJSON, plain-text, log, and CSV
-parsing, input/output contracts,
-batch orchestration, and atomic publication helpers. See
-[docs/architecture.md](docs/architecture.md) for component boundaries and
-failure semantics.
-
-![Optional model and interface path](docs/assets/model-evaluation-loop.svg)
-
-The CLI and local UI call the same fail-closed application services.
-
-An optional local authenticated workspace now adds an offline consult-and-export
-flow with separate admin, analyst, and viewer roles. It uses a private SQLite
-database, retains raw source bytes only when explicitly requested from the CLI,
-and applies separate retention periods to raw data, results, and audit events.
-The optional web adapter adds a localhost-only browser interface and HTTP API;
-its web surface validates uploads before returning `202 Accepted`, runs them in
-a bounded single-worker queue, exposes progress and cancellation, and never
-stores raw uploads in SQLite. See the
-[local workspace guide](docs/local-workspace.md) and
-[web workspace guide](docs/web-workspace.md). This is not a remotely exposed
-multi-tenant service.
+> **Alpha:** this project is not production-ready. It is designed for local,
+> bounded analysis and does not ship logs, datasets, model weights, or default
+> credentials.
 
 ![Authenticated dashboard with synthetic data](docs/assets/dashboard-preview.png)
 
-The screenshot is a real localhost session rendered from a disposable workspace
-containing only synthetic users, job counts, timestamps, and audit events. The
-browser workflow is localized in English, Italian, French, and Spanish.
+## What it does
 
-## Fail-closed batch contract
+- Accepts `.jsonl`, `.ndjson`, `.txt`, `.log`, and `.csv` files.
+- Validates the complete file before classification starts.
+- Classifies subsystem and severity without copying the source message into the
+  result.
+- Provides an authenticated local dashboard with admin, analyst, and viewer
+  roles.
+- Supports English, Italian, French, and Spanish in the browser interface.
+- Exports completed results and records privacy-minimal audit events.
+- Publishes a batch only when every input and prediction passes validation.
 
-JSONL and NDJSON require every non-blank input line to be a UTF-8 JSON object
-with a non-blank `message` string. Duplicate object keys, non-finite numbers,
-malformed JSON, invalid optional field types, and scalar top-level values are
-rejected. TXT and LOG treat every non-blank LF-delimited line as one message.
-CSV requires a unique, non-blank header containing the exact `message` field;
-every non-blank row must have the same field count. Quoted commas and embedded
-newlines follow the Python CSV dialect. All formats preserve the SHA-256 digest
-of the exact source bytes, including a permitted UTF-8 BOM.
+The default rules adapter works offline and requires no model download.
+Experimental zero-shot model profiles are available separately for English and
+multilingual analysis.
 
-The complete input is parsed and validated before the predictor is called. The
-predictor must then return exactly one mapping for every input record. If any
-chunk fails or returns the wrong number of results, output publication does not
-start. Predictor iterables are consumed only through the first excess result,
-so cardinality checks do not materialize unbounded overproduction.
+## Install on Linux
 
-Unknown fields are preserved and passed to the predictor. The caller remains
-responsible for data minimization before invoking the library.
+Download the preferred file from [GitHub Releases](https://github.com/rikimela1992/log-classification-pipeline/releases):
 
-## Resource bounds
+| Package | Intended use |
+| --- | --- |
+| AppImage | Portable desktop launch |
+| `.deb` | Ubuntu 24.04+ and Debian 13 |
+| `.rpm` | Fedora 41+ |
+| `.tar.gz` | Portable archive or server setup |
 
-`read_input_file`, `read_jsonl`, and `process_batch` accept positive
-`max_input_bytes` and `max_records` limits. The byte limit is enforced while
-reading at most one byte beyond the boundary. The record limit counts parsed,
-non-blank records and fails on the first excess record. Either failure occurs
-before predictor invocation.
+The first desktop launch guides you through creating a private workspace,
+administrator account, and password. The application then opens locally at
+`http://127.0.0.1:8080/app`.
 
-The reusable library keeps `None` defaults to avoid imposing policy on callers.
-The included CLI and web application use an explicit alpha profile of 25 MiB
-and 25,000 records per file. The web queue additionally admits at most 50 MiB
-of raw source bytes across running and queued jobs. The package remains an
-in-memory batch foundation rather than a streaming parser.
+Packages contain the web workspace and offline rules baseline, but no model,
+tokenizer, Transformers, PyTorch, or dataset. Alpha artifacts have SHA-256
+checksums and SBOMs but are not cryptographically signed.
 
-## Atomic output publication
+See [Linux packages](docs/linux-packages.md) for installation, checksum
+verification, and optional systemd activation.
 
-Output is encoded into a temporary file in the destination directory. The file
-is flushed and synced before publication. Output permissions default to
-`0o600` and can be changed explicitly with `output_mode`. By default, an
-existing destination is not replaced. The directory is synced after the
-destination becomes visible.
+## Input formats
 
-Failures before publication attempt to remove the temporary file. Failures
-after the destination becomes visible raise a dedicated committed-publication
-exception, so callers are not told that an already visible output was rolled back.
+| Format | Expected content |
+| --- | --- |
+| JSONL / NDJSON | One JSON object per line with a non-blank `message` field |
+| TXT / LOG | One message per non-blank line |
+| CSV | A unique header containing the exact `message` column |
 
-## Installation
+Quoted CSV fields and embedded newlines are supported. The CLI and web app use
+an alpha limit of 25 MiB and 25,000 records per file; the local web queue admits
+at most 50 MiB across running and queued jobs.
 
-### Self-contained Linux release candidates
+Malformed input, invalid UTF-8, duplicate JSON keys, inconsistent CSV rows,
+predictor failures, and result-count mismatches fail closed. No partial result
+is published.
 
-The Linux packaging workflow builds self-contained `.deb`, `.rpm`, AppImage,
-and `.tar.gz` candidates with SHA-256 checksums and CycloneDX SBOMs. They remove
-the need to create a Python environment or install web dependencies manually.
-The first desktop launch guides the operator through creating a private local
-workspace and password; no default credential is shipped. These alpha bundles
-contain the authenticated web workspace and rules baseline, but no model,
-tokenizer, dataset, Transformers, or PyTorch runtime.
+![Fail-closed batch pipeline](docs/assets/pipeline-overview.svg)
 
-See [Linux packages](docs/linux-packages.md) for compatibility, graphical
-installation, first launch, server-service activation, and verification. A
-successful packaging workflow produces release candidates; it does not itself
-publish a GitHub release.
+## Models
 
-### Python installation
+`rules` is the safe initial choice: deterministic, offline, and bundled.
+Optional profiles include a pinned English DeBERTa NLI encoder and experimental
+multilingual encoders covering English, Italian, French, and Spanish.
 
-Python 3.12 or newer is required. The core has no third-party runtime
-dependencies. Model and UI dependencies are optional.
+Model downloads are disabled by default. Local model directories require a
+verified manifest and remain outside this repository. Current multilingual
+results are development measurements, not accuracy or production claims.
 
-    python3 -m venv .venv
-    .venv/bin/python -m pip install --no-deps .
+See [model selection](docs/model-selection.md) and
+[evaluation results](docs/results/2026-08-07-multilingual-model-evaluation.md).
 
-Check the core runtime and see which optional feature modules are available
-without importing a model or opening a network listener:
+## Python and development
 
-    .venv/bin/log-classify doctor
+Python 3.12 or newer is required.
 
-After creating a workspace, include `--database ./state/workspace.sqlite3` to
-verify its private path and schema. Automation can repeat `--require web`,
-`--require ui`, or `--require ml` to receive a non-zero status when the named
-extra is unavailable.
+```console
+python3 -m venv .venv
+.venv/bin/python -m pip install --no-deps .
+.venv/bin/log-classify doctor
+```
 
-For the local rules-based wiring demo:
+Install the authenticated web interface and initialize a workspace:
 
-    PYTHONPATH=src python3 -m log_classification_pipeline.cli evaluate tests/fixtures/synthetic-evaluation.jsonl
+```console
+.venv/bin/python -m pip install '.[web]'
+.venv/bin/log-classify workspace init ./state/workspace.sqlite3 sample-org owner
+.venv/bin/log-classify web ./state/workspace.sqlite3
+```
 
-Inspect every registered choice without loading or downloading a model:
+Passwords are prompted interactively and are never accepted as command-line
+arguments.
 
-    .venv/bin/log-classify models
+Run the full test suite:
 
-The catalog keeps `rules` as the safe initial choice and reports languages,
-artifact policy, execution tier, immutable model revision, and quality status
-for each experimental profile.
-
-For the local UI:
-
-    .venv/bin/python -m pip install '.[ui]'
-    .venv/bin/log-classify ui
-
-For the authenticated local workspace:
-
-    .venv/bin/log-classify workspace init ./state/workspace.sqlite3 sample-org owner
-    .venv/bin/log-classify workspace classify \
-      ./state/workspace.sqlite3 sample-org owner examples/input-valid.jsonl
-    .venv/bin/log-classify workspace jobs \
-      ./state/workspace.sqlite3 sample-org owner
-
-Passwords are prompted interactively. The workspace has no default credentials
-and does not accept passwords as command-line arguments.
-
-For the authenticated localhost web interface and API:
-
-    .venv/bin/python -m pip install '.[web]'
-    .venv/bin/log-classify web ./state/workspace.sqlite3
-
-Then open `http://127.0.0.1:8080/app`. The server binds only to loopback and is
-an alpha local workflow, not an Internet-facing deployment. See the
-[web workspace guide](docs/web-workspace.md) for roles, API behavior, and
-security boundaries. The browser interface can be switched between English,
-Italian, French, and Spanish; API and export field names remain stable.
-The standard CLI web command uses localized model names and explanations while
-preserving stable profile IDs in API requests and stored job metadata. Enabling
-a profile does not make it the initial selection or load its artifact at
-startup.
-`--queue-capacity` bounds admitted work, including the running job,
-`--queue-byte-capacity` bounds the total raw bytes held by those jobs, and
-`--worker-batch-size` controls cancellation/progress checkpoints.
-Failed logins are throttled in-process by both account and direct client source;
-the defaults allow five account failures and twenty source failures per
-60-second window. The limiter retains keyed digests rather than submitted
-organization names, usernames, or client addresses.
-
-For zero-shot inference:
-
-    .venv/bin/python -m pip install '.[ml]'
-    .venv/bin/log-classify model-manifest create /path/to/local/model \
-      --model-profile english-deberta-v1 > /path/to/model-manifest.json
-    .venv/bin/log-classify model-manifest verify /path/to/local/model \
-      /path/to/model-manifest.json --model-profile english-deberta-v1
-    .venv/bin/log-classify classify input.jsonl output.jsonl --adapter zero-shot \
-      --model-source /path/to/local/model \
-      --model-id MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c \
-      --model-revision bddf8c5411c34ac3565e16e04384fd68b2618dda \
-      --model-manifest /path/to/model-manifest.json
-
-Downloads are disabled by default. Pass `--allow-download` only when network
-access and the pinned model provenance are acceptable.
-
-The manifest must remain outside the model directory. It binds the selected
-profile to a sorted inventory of relevant local files, their sizes, and their
-SHA-256 digests. Local loading verifies it once during configuration and again
-while copying the inventoried files into a private temporary directory. That
-copy is verified before Transformers is imported, and the framework reads the
-verified copy. The verified tree digest is included in every prediction and
-evaluation provenance record.
-
-![Local model artifact verification](docs/assets/model-artifact-verification.svg)
-
-A locally created manifest detects later drift; it is not a signature or a
-third-party trust assertion. Create it only after obtaining the pinned model
-from a trusted source. Model weights and caches remain outside this repository.
-The temporary snapshot is removed after the tokenizer and model are loaded;
-plan for temporary free disk space approximately equal to the model size.
-
-On a compatible CPU-only Linux host, install a CPU build of PyTorch first;
-otherwise the generic resolver may select large accelerator dependencies that
-the host cannot use:
-
-    .venv/bin/python -m pip install --index-url \
-      https://download.pytorch.org/whl/cpu 'torch>=2.4,<3'
-    .venv/bin/python -m pip install '.[ml]'
-
-Confirm the platform-specific command with the official PyTorch installer when
-using another operating system or architecture.
-
-For multilingual English, Italian, French, and Spanish input, select the
-smallest experimental CPU profile explicitly:
-
-    .venv/bin/log-classify evaluate \
-      tests/fixtures/synthetic-evaluation-multilingual.jsonl \
-      --adapter zero-shot --model-profile multilingual-minilm-v1 \
-      --allow-download
-
-The approximately 428 MB weight file completed the 40-record development
-fixture on the measured 4-vCPU host, but the conservative `0.60` threshold
-abstained on every record. At threshold zero its raw top-label accuracy was
-`0.60` for subsystem and `0.30` for severity. It is therefore a capacity-tested
-experiment, not an accuracy-qualified default. The larger
-`multilingual-mdeberta-v1` and `multilingual-bge-m3-v1` profiles remain explicit
-asynchronous/GPU experiments.
-
-## Synthetic example
+```console
+PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
+  python3 -m unittest discover -s tests -v
+```
 
 Validate the included synthetic examples without invoking a model:
 
-    PYTHONPATH=src python3 examples/validate.py examples/input-valid.jsonl
-    PYTHONPATH=src python3 examples/validate.py examples/input-invalid.jsonl
+```console
+PYTHONPATH=src python3 examples/validate.py examples/input-valid.jsonl
+PYTHONPATH=src python3 examples/validate.py examples/input-invalid.jsonl
+```
 
-The first command exits with status 0. The second command reports a validation
-failure and exits non-zero. It does not create output or call a predictor.
+## Documentation
 
-## Experimental model adapter
+| Topic | Document |
+| --- | --- |
+| Architecture and atomic publication | [Architecture](docs/architecture.md) |
+| Local accounts, roles, retention, and export | [Local workspace](docs/local-workspace.md) |
+| Browser UI, API, queue, and security boundaries | [Web workspace](docs/web-workspace.md) |
+| Linux packages and first launch | [Linux packages](docs/linux-packages.md) |
+| Model profiles and artifact verification | [Model selection](docs/model-selection.md) |
+| Security reporting | [Security policy](SECURITY.md) |
+| Measured validation evidence | [Results](docs/results/) |
 
-The default experimental English encoder is
-[`MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c`](https://huggingface.co/MoritzLaurer/deberta-v3-base-zeroshot-v2.0-c),
-pinned to a full commit revision. It is an NLI encoder used for zero-shot
-classification, not a generative LLM. The public taxonomy has ten subsystem
-labels and five severity labels. Predictions include labels, scores,
-abstention, model/profile provenance, and a deterministic configuration digest;
-they do not copy the source message. Three opt-in multilingual profiles cover
-the intended four-language software path at different capacity points without
-claiming deployment-grade accuracy.
+## Security and limitations
 
-See [model selection](docs/model-selection.md) for the rationale and
-[synthetic evaluation results](docs/results/2026-08-07-synthetic-evaluation.md)
-for the first honest, deliberately small measurement. The separate
-[local web security validation](docs/results/2026-08-07-web-security-validation.md)
-records the current authentication, upload, and privacy checks.
-The [Linux packaging validation](docs/results/2026-08-07-linux-packaging-validation.md)
-separates locally completed bundle and DEB checks from the still-required
-native AppImage and RPM CI gate.
-The [multilingual smoke baseline](docs/results/2026-08-07-multilingual-smoke-baseline.md)
-records the rules adapter's limitations on the balanced development fixture.
-The [multilingual model evaluation](docs/results/2026-08-07-multilingual-model-evaluation.md)
-records the measured MiniLM and mDeBERTa CPU outcomes, including unsuccessful
-capacity results.
+- The browser and API bind only to loopback; remote deployment is unsupported.
+- The SQLite workspace is local and supports one organization per database.
+- Inputs are processed in memory and the predictor runs in-process.
+- The queue and login limiter are process-local and reset on restart.
+- The database is not encrypted and secure deletion cannot cover backups,
+  snapshots, swap, or copy-on-write storage.
+- Zero-shot scores are experimental and are not calibrated probabilities.
+- Atomic publication targets local POSIX-like filesystems.
+- Production hardening, load testing, SSO, distributed workers, and an
+  independent security review are still pending.
 
-## Running tests
+All examples and screenshots use synthetic data. Do not add real logs,
+credentials, infrastructure identifiers, model weights, or operational
+configuration to this repository.
 
-    PYTHONDONTWRITEBYTECODE=1 PYTHONPATH=src \
-      python3 -m unittest discover -s tests -v
+## License
 
-The suite covers strict parsing, aggregate validation errors, predictor count
-mismatches, exceptions in later chunks, symlink and path aliases, overwrite
-behavior, resource-limit boundaries, Unicode JSONL separators, bounded predictor
-output, atomic cleanup, post-publication durability errors, workspace RBAC,
-pre-session and session-bound CSRF, bounded multi-format uploads, aggregate
-queue-byte admission, security headers, and
-privacy-minimal web exports. Manifest tests cover tampering, missing and added
-files, path traversal, symbolic links, strict JSON, bounds, and re-verification
-before model loading. Web integration tests require `.[web,test]`.
-
-## Security and privacy
-
-- Every bundled example and fixture is synthetic.
-- No real logs, infrastructure identifiers, credentials, datasets, or model
-  artifacts belong in this repository.
-- Input is treated as untrusted structured data; validation happens before model
-  invocation.
-- The library does not redact arbitrary user fields. Applications must minimize
-  and sanitize data before processing.
-- Existing destinations are protected from overwrite by default.
-- Security reports should follow [SECURITY.md](SECURITY.md).
-
-## Current limitations
-
-- All zero-shot profiles are experimental and their scores are not calibrated
-  probabilities. The fast multilingual profile has weak measured severity
-  accuracy; the larger profiles are not suitable for synchronous CPU use on
-  the measured host.
-- Model artifacts and optional dependencies are not bundled.
-- Verified local loading copies the model temporarily, increasing cold-start
-  time and requiring free disk space approximately equal to the artifact.
-- The Gradio UI is an unauthenticated localhost demonstration. The separate web
-  workspace is authenticated but remains localhost-only and alpha.
-- The authenticated workspace supports one organization per SQLite database.
-  Its optional HTTP API and browser interface are not a remotely supported
-  service, an SSO integration, or a production multi-tenant isolation boundary.
-- The web adapter's login limiter is process-local and resets on restart. It has
-  no distributed rate limiter, TLS termination, reverse-proxy support, account
-  recovery, or server database.
-- The web queue is one process-local worker. Bounded raw input bytes exist
-  transiently in RAM and a private temporary file during execution, and may
-  therefore be exposed to swap, core dumps, or the owning OS account. Jobs are
-  not resumed after restart; active states become `failed/interrupted`.
-- Workspace database permissions and SQLite secure deletion do not provide
-  encryption at rest or guarantee erasure from backups, snapshots, SSDs, or
-  copy-on-write storage.
-- Input is read and validated in memory. The bundled applications use a
-  conservative alpha limit profile, but it is not a production capacity claim.
-- Atomicity and durability behavior is designed for local POSIX-like
-  filesystems and is not claimed for every network filesystem or operating
-  system.
-- The predictor is supplied by the caller and runs in-process without isolation.
-- The classification taxonomy is versioned, but input schema negotiation is not
-  implemented.
-- This project has not completed production hardening, load testing, or an
-  independent security review.
-
-## Roadmap
-
-1. Define measured operational profiles and evaluate conservative default limits.
-2. Calibrate abstention and severity labels on a larger, independently authored
-   synthetic evaluation set.
-3. Calibrate separate subsystem/severity thresholds on a larger development set
-   and validate the selected profile on an independently authored holdout.
-4. Add a signed or independently attested artifact trust workflow; the current
-   local manifest detects drift but does not establish who supplied the files.
-5. Review cross-platform publication semantics and document supported
-   filesystems.
-6. Run the larger pinned multilingual profiles on suitable GPU infrastructure,
-   then build a larger independently reviewed holdout before making accuracy
-   claims.
-7. Add a distributed rate limit and deployment threat model before considering
-   any non-loopback API or web exposure; the current limiter is process-local.
-8. Add bounded syslog ingestion with backpressure, source authentication, and a
-   separate retention policy; keep it disabled by default.
-9. Validate core, web, and Linux packaging CI, then prepare the planned
-   v0.1.0-alpha.1 release without changing the foundation scope.
+[MIT License](LICENSE) — Copyright (c) 2026 Riccardo Melini.

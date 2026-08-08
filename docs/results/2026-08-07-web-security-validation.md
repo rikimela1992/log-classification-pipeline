@@ -11,8 +11,8 @@ workflow, **not** a production security assessment or penetration test.
 
 | Check | Result |
 | --- | --- |
-| Complete suite with `web` and `test` extras | 173 tests passed |
-| Core-only environment | 143 tests passed; 30 web tests intentionally skipped |
+| Complete suite with `web` and `test` extras | 174 tests passed |
+| Core-only environment | 144 tests passed; 30 web tests intentionally skipped |
 | Python/TOML parsing | passed |
 | `git diff --check` | passed |
 | Local wheel build | passed |
