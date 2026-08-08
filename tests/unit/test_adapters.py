@@ -6,13 +6,16 @@ import unittest
 from pathlib import Path
 
 from log_classification_pipeline.adapters.rules import RulesPredictor
-from log_classification_pipeline.adapters.zero_shot import ZeroShotConfig, ZeroShotPredictor
+from log_classification_pipeline.adapters.zero_shot import (
+    ZeroShotConfig,
+    ZeroShotPredictor,
+)
 from log_classification_pipeline.contracts import PredictionContractError
+from log_classification_pipeline.model_artifact import create_artifact_manifest
 from log_classification_pipeline.model_catalog import (
     configured_model_catalog,
     registered_model_catalog,
 )
-from log_classification_pipeline.model_artifact import create_artifact_manifest
 from log_classification_pipeline.model_profiles import (
     MODEL_PROFILE_IDS,
     MULTILINGUAL_BALANCED_PROFILE_ID,
@@ -20,7 +23,10 @@ from log_classification_pipeline.model_profiles import (
     MULTILINGUAL_PROFILE_ID,
     get_model_profile,
 )
-from log_classification_pipeline.taxonomy import SEVERITY_CANDIDATES, SUBSYSTEM_CANDIDATES
+from log_classification_pipeline.taxonomy import (
+    SEVERITY_CANDIDATES,
+    SUBSYSTEM_CANDIDATES,
+)
 
 
 class FakeZeroShotPipeline:

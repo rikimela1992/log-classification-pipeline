@@ -10,7 +10,6 @@ from .adapters.zero_shot import ZeroShotPredictor
 from .batch import Predictor
 from .model_profiles import MODEL_PROFILE_IDS, MODEL_PROFILES
 
-
 RULES_MODEL_NAME = "rules"
 
 

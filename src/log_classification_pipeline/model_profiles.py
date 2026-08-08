@@ -10,7 +10,6 @@ from typing import Any
 
 from .taxonomy import SEVERITY_CANDIDATES, SUBSYSTEM_CANDIDATES
 
-
 ENGLISH_PROFILE_ID = "english-deberta-v1"
 MULTILINGUAL_PROFILE_ID = "multilingual-bge-m3-v1"
 MULTILINGUAL_FAST_PROFILE_ID = "multilingual-minilm-v1"

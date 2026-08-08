@@ -8,7 +8,6 @@ from string import Formatter
 from types import MappingProxyType
 from typing import Mapping
 
-
 SUPPORTED_LOCALES = ("en", "it", "fr", "es")
 DEFAULT_LOCALE = "en"
 _MAX_ACCEPT_LANGUAGE_BYTES = 1024

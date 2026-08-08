@@ -197,8 +197,11 @@ def load_zero_shot_pipeline(config: ZeroShotConfig) -> ZeroShotPipeline:
             "trust_remote_code": False,
         }
         source = str(load_root if local_source else config.model_source)
-        tokenizer = AutoTokenizer.from_pretrained(source, **common)
-        model = AutoModelForSequenceClassification.from_pretrained(
+        # Both loaders receive the immutable profile revision through common.
+        tokenizer = AutoTokenizer.from_pretrained(  # nosec B615
+            source, **common
+        )
+        model = AutoModelForSequenceClassification.from_pretrained(  # nosec B615
             source,
             use_safetensors=True,
             **common,
