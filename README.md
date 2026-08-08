@@ -114,11 +114,18 @@ Install the optional authenticated web interface with `.[web]`. Passwords are
 prompted interactively and never accepted as command-line arguments. See
 [the test guide](tests/README.md) for the development workflow and coverage.
 
+For a disposable cloud review of the CLI and automated suite, open a private
+[GitHub Codespace](https://codespaces.new/rikimela1992/log-classification-pipeline?quickstart=1).
+The environment uses synthetic fixtures, installs no model weights, and does
+not expose the localhost-only browser application. See the
+[cloud testing guide](docs/cloud-testing.md).
+
 ## Project guide
 
 | Read about | Document |
 | --- | --- |
 | Installers and first launch | [Linux packages](docs/linux-packages.md) |
+| Disposable CLI and test environment | [Cloud testing](docs/cloud-testing.md) |
 | Browser app, API, and security boundaries | [Web workspace](docs/web-workspace.md) |
 | Accounts, roles, retention, and export | [Local workspace](docs/local-workspace.md) |
 | Fail-closed design and atomic publication | [Architecture](docs/architecture.md) |

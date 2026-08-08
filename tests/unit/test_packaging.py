@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import subprocess
 import tomllib
@@ -8,6 +9,44 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 ROOT = Path(__file__).parents[2]
+
+
+class CloudDevelopmentEnvironmentTests(unittest.TestCase):
+    def test_codespace_is_pinned_private_and_has_a_safe_bootstrap(self) -> None:
+        config = json.loads(
+            (ROOT / ".devcontainer/devcontainer.json").read_text(encoding="utf-8")
+        )
+        self.assertEqual(config["build"], {"dockerfile": "Dockerfile"})
+        dockerfile = (ROOT / ".devcontainer/Dockerfile").read_text(encoding="utf-8")
+        self.assertRegex(
+            dockerfile.splitlines()[0].removeprefix("FROM "),
+            r"^mcr\.microsoft\.com/devcontainers/python:[^@]+@sha256:[0-9a-f]{64}$",
+        )
+        self.assertIn("rm -f /etc/apt/sources.list.d/yarn.list", dockerfile)
+        self.assertNotIn("forwardPorts", config)
+        self.assertEqual(
+            config["features"],
+            {
+                "ghcr.io/devcontainers/features/sshd:1": {
+                    "version": "latest"
+                }
+            },
+        )
+        self.assertEqual(
+            config["postCreateCommand"], ".devcontainer/post-create.sh"
+        )
+
+        bootstrap = ROOT / config["postCreateCommand"]
+        self.assertTrue(os.access(bootstrap, os.X_OK))
+        subprocess.run(["bash", "-n", bootstrap], check=True)
+        contents = bootstrap.read_text(encoding="utf-8")
+        self.assertIn("pip==26.2.1", contents)
+        self.assertIn("doctor --require web", contents)
+        self.assertNotIn("[ml", contents)
+
+        guide = (ROOT / "docs/cloud-testing.md").read_text(encoding="utf-8")
+        self.assertIn("must not be exposed through a public", guide)
+        self.assertIn("synthetic fixtures", guide)
 
 
 class LinuxPackagingTests(unittest.TestCase):
