@@ -16,10 +16,13 @@ class CloudDevelopmentEnvironmentTests(unittest.TestCase):
         config = json.loads(
             (ROOT / ".devcontainer/devcontainer.json").read_text(encoding="utf-8")
         )
+        self.assertEqual(config["build"], {"dockerfile": "Dockerfile"})
+        dockerfile = (ROOT / ".devcontainer/Dockerfile").read_text(encoding="utf-8")
         self.assertRegex(
-            config["image"],
+            dockerfile.splitlines()[0].removeprefix("FROM "),
             r"^mcr\.microsoft\.com/devcontainers/python:[^@]+@sha256:[0-9a-f]{64}$",
         )
+        self.assertIn("rm -f /etc/apt/sources.list.d/yarn.list", dockerfile)
         self.assertNotIn("forwardPorts", config)
         self.assertEqual(
             config["features"],
