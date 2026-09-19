@@ -30,7 +30,7 @@ web = [
     "fastapi>=0.141,<0.142",
     "jinja2>=3.1,<4",
     "python-multipart>=0.0.20,<1",
-    "uvicorn>=0.52,<0.53",
+    "uvicorn>=0.52,<0.54",
 ]
 test = ["httpx2>=2.9,<3"]
 quality = [
