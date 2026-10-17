@@ -27,7 +27,7 @@ ml = [
 ]
 ui = ["gradio>=6.0,<7"]
 web = [
-    "fastapi>=0.141,<0.142",
+    "fastapi>=0.141,<0.144",
     "jinja2>=3.1,<4",
     "python-multipart>=0.0.20,<1",
     "uvicorn>=0.52,<0.53",
