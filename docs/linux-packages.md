@@ -45,7 +45,7 @@ account. No default credential exists.
 The portable archive uses the same launcher:
 
 ```console
-./log-classification-pipeline-0.1.0-alpha.1-linux-x86_64/usr/bin/log-classification-pipeline
+./log-classification-pipeline-0.1.0-alpha.2-linux-x86_64/usr/bin/log-classification-pipeline
 ```
 
 ## Deliberate server activation

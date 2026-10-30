@@ -43,7 +43,7 @@
 
 ## Quick start
 
-Download **[v0.1.0-alpha.1](https://github.com/silirim/log-classification-pipeline/releases/tag/v0.1.0-alpha.1)** for 64-bit Linux:
+Download **[v0.1.0-alpha.2](https://github.com/silirim/log-classification-pipeline/releases/tag/v0.1.0-alpha.2)** for 64-bit Linux:
 
 | Package | Best for |
 | --- | --- |

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "log-classification-pipeline"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Fail-closed batch-processing foundation for log classification"
 authors = [{ name = "Riccardo Melini" }]
 readme = "README.md"
@@ -27,17 +27,17 @@ ml = [
 ]
 ui = ["gradio>=6.0,<7"]
 web = [
-    "fastapi>=0.141,<0.142",
+    "fastapi>=0.141,<0.158",
     "jinja2>=3.1,<4",
     "python-multipart>=0.0.20,<1",
-    "uvicorn>=0.52,<0.53",
+    "uvicorn>=0.52,<0.55",
 ]
 test = ["httpx2>=2.9,<3"]
 quality = [
     "bandit>=1.9,<2",
     "coverage[toml]>=7.10,<8",
     "pip-audit>=2.10,<3",
-    "ruff>=0.14,<0.15",
+    "ruff>=0.14,<0.18",
 ]
 demo = [
     "gradio>=6.0,<7",
