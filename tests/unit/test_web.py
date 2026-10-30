@@ -502,7 +502,7 @@ class WebApplicationTests(unittest.TestCase):
         page = self.client.get("/app", headers={"Accept-Language": "it"})
         self.assertEqual(page.status_code, 200, page.text)
         self.assertIn(
-            '<option value="rules">Baseline a regole — scelta sicura</option>',
+            '<option value="rules">Regole per formati di log — scelta sicura</option>',
             page.text,
         )
         self.assertIn("non carica artefatti", page.text)

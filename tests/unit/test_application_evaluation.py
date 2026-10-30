@@ -40,7 +40,7 @@ class ApplicationTests(unittest.TestCase):
     def test_classify_message_uses_full_pipeline_without_returning_input(self) -> None:
         result = classify_message("Authentication failed", RulesPredictor())
         self.assertEqual(result["subsystem"]["label"], "auth")
-        self.assertEqual(result["severity"]["label"], "error")
+        self.assertEqual(result["severity"]["label"], "security_event")
         self.assertNotIn("message", result)
 
     def test_classify_message_rejects_blank_or_non_string_values(self) -> None:
@@ -316,7 +316,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(result["split"], "development")
         self.assertEqual(
             result["model"],
-            {"id": "synthetic-rules-baseline", "revision": "1"},
+            {"id": "log-format-rules", "revision": "2"},
         )
 
     def test_perfect_full_taxonomy_evaluation_reports_reproducible_metrics(self) -> None:

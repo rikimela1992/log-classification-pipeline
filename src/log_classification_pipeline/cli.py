@@ -28,6 +28,8 @@ from .model_profiles import (
     ENGLISH_PROFILE_ID,
     MODEL_PROFILE_IDS,
 )
+from .prediction import validate_classification_prediction
+from .report import group_findings, render_text_report, summarize_predictions
 from .workspace import RetentionPolicy, Role, Workspace
 
 
@@ -45,7 +47,7 @@ def _add_adapter(parser: argparse.ArgumentParser) -> None:
         "--adapter",
         choices=("rules", "zero-shot"),
         default="rules",
-        help="rules is a wiring baseline; zero-shot requires the ml extra",
+        help="rules needs no model; zero-shot requires the ml extra",
     )
     parser.add_argument(
         "--model-profile",
@@ -311,6 +313,16 @@ def _parser() -> argparse.ArgumentParser:
     _add_limits(classify)
     _add_adapter(classify)
 
+    report = subparsers.add_parser(
+        "report",
+        help="summarize a classified file and list what needs attention",
+    )
+    report.add_argument("input", type=Path)
+    report.add_argument("predictions", type=Path)
+    report.add_argument("--json", action="store_true")
+    report.add_argument("--limit", type=int, default=20)
+    _add_limits(report)
+
     evaluate = subparsers.add_parser(
         "evaluate",
         help="evaluate a labelled synthetic JSONL, NDJSON, or CSV fixture",
@@ -568,6 +580,27 @@ def _run(args: argparse.Namespace) -> None:
         )
         return
 
+    if args.command == "report":
+        if args.limit < 1:
+            raise ValueError("limit must be positive")
+        parsed = read_input_file(
+            args.input,
+            max_input_bytes=args.max_input_bytes,
+            max_records=args.max_records,
+        )
+        with args.predictions.open(encoding="utf-8") as stream:
+            predictions = [
+                validate_classification_prediction(json.loads(line), number)
+                for number, line in enumerate(stream, start=1)
+            ]
+        findings = group_findings(parsed.records, predictions, limit=args.limit)
+        summary = summarize_predictions(predictions)
+        if args.json:
+            summary.pop("attention")
+            _emit({**summary, "findings": findings})
+        else:
+            print(render_text_report(summary, findings))
+        return
     if args.command == "workspace":
         _run_workspace(args)
         return

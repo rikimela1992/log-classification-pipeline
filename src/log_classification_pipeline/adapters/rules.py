@@ -269,6 +269,10 @@ class RulesPredictor:
             else:
                 subsystem, subsystem_score = _classify_subsystem(message, program)
                 severity, severity_score = _classify_severity(message)
+                # A format-declared severity must not disappear into abstention
+                # because the emitting subsystem is unknown.
+                if subsystem is None and severity_score == _STRUCTURAL_SCORE:
+                    subsystem, subsystem_score = "compute", _GENERIC_SCORE
 
             raw_prediction = {
                 "schema_version": TAXONOMY_VERSION,

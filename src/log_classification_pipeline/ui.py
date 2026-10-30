@@ -68,7 +68,7 @@ def build_demo(predictor: Predictor):
             )
 
         gr.Markdown(
-            "The default rules adapter is only a deterministic wiring "
-            "baseline. Model downloads are disabled unless explicitly enabled."
+            "The default rules adapter reads common log formats. "
+            "Model downloads are disabled unless explicitly enabled."
         )
     return demo

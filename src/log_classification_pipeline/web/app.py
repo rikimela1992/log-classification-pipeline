@@ -48,6 +48,7 @@ from ..inputs import InputFormat, read_input_file, resolve_input_format
 from ..jsonl import ParsedBatch
 from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
 from ..model_profiles import MODEL_PROFILES
+from ..report import summarize_predictions
 from ..workspace import (
     AuthenticationError,
     AuthorizationError,
@@ -1286,6 +1287,11 @@ def create_app(
                 "csrf": workspace.csrf_token(token),
                 "job": stored_job,
                 "status": status,
+                "summary": (
+                    summarize_predictions(stored_job["results"])
+                    if stored_job["results"] is not None
+                    else None
+                ),
                 "principal": workspace.principal(token),
             },
         )

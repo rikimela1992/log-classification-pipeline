@@ -26,19 +26,30 @@
 {% elif job.status in ["failed", "cancelled"] %}
 <section class="panel"><h2>{{ t("status." + job.status) }}</h2><p>{{ t("job.failed") }}</p>{% if job.failure_code %}<p class="muted">{{ t("failure." + job.failure_code) }}</p>{% endif %}</section>
 {% endif %}
-{% if job.results is not none %}
+{% if summary is not none %}
 <section class="panel">
-  <div class="section-heading"><h2>{{ t("job.results") }}</h2><a class="button secondary" href="/app/jobs/{{ job.id }}/export">{{ t("job.export") }}</a></div>
-  <div class="cards">
-  {% for result in job.results %}
-    <article class="result-card">
-      <div><span class="label">{{ t("job.subsystem") }}</span><strong>{{ result.subsystem.label }}</strong><small>{{ result.subsystem.score }}</small></div>
-      <div><span class="label">{{ t("job.severity") }}</span><strong>{{ result.severity.label }}</strong><small>{{ result.severity.score }}</small></div>
-      <div><span class="label">{{ t("job.model") }}</span><strong>{{ result.model.id }}</strong><small>{{ result.model.revision }}</small>{% if result.model.profile_id %}<small>{{ t("job.profile") }}: {{ result.model.profile_id }}@{{ result.model.profile_revision }}</small>{% endif %}</div>
-      {% if result.abstained %}<span class="abstained">{{ t("job.abstained") }}</span>{% endif %}
-    </article>
-  {% endfor %}
+  <div class="section-heading"><h2>{{ t("job.summary") }}</h2><a class="button secondary" href="/app/jobs/{{ job.id }}/export">{{ t("job.export") }}</a></div>
+  <div class="severity-grid">
+    {% for label, count in summary.severity.items() %}<div class="severity severity-{{ label }}"><span>{{ t("severity." + label) }}</span><strong>{{ count }}</strong></div>{% endfor %}
   </div>
+  <p class="muted">{{ t("job.abstained_count", count=summary.abstained) }}</p>
+  {% if job.results %}{% set model = job.results[0].model %}<p class="muted">{{ t("job.model") }}: <code>{{ model.id }}</code> {{ model.revision }}{% if model.profile_id %} · {{ t("job.profile") }}: {{ model.profile_id }}@{{ model.profile_revision }}{% endif %}</p>{% endif %}
+  <ul class="subsystem-list">
+    {% for item in summary.subsystem %}<li><span>{{ item.label }}</span><strong>{{ item.count }}</strong></li>{% endfor %}
+  </ul>
+</section>
+<section class="panel">
+  <div class="section-heading"><h2>{{ t("job.attention") }}</h2><strong>{{ summary.attention_total }}</strong></div>
+  {% if summary.attention %}
+  <p class="muted">{{ t("job.attention_help") }}</p>
+  <div class="table-scroll"><table>
+    <thead><tr><th>{{ t("job.record") }}</th><th>{{ t("job.severity") }}</th><th>{{ t("job.subsystem") }}</th><th></th></tr></thead>
+    <tbody>
+    {% for item in summary.attention %}<tr><td>{{ item.record }}</td><td><span class="severity-tag severity-{{ item.severity }}">{{ t("severity." + item.severity) }}</span></td><td>{{ item.subsystem }}</td><td>{% if item.abstained %}<span class="abstained">{{ t("job.abstained") }}</span>{% endif %}</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% if summary.attention_total > summary.attention|length %}<p class="muted">{{ t("job.attention_truncated", shown=summary.attention|length) }}</p>{% endif %}
+  {% else %}<p class="empty">{{ t("job.attention_empty") }}</p>{% endif %}
 </section>
 {% endif %}
 {% endblock %}
