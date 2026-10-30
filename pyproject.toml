@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "log-classification-pipeline"
-version = "0.1.0a1"
+version = "0.1.0a2"
 description = "Fail-closed batch-processing foundation for log classification"
 authors = [{ name = "Riccardo Melini" }]
 readme = "README.md"

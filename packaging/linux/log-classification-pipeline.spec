@@ -2,7 +2,7 @@
 
 Name:           log-classification-pipeline
 Version:        0.1.0
-Release:        0.alpha.1%{?dist}
+Release:        0.alpha.2%{?dist}
 Summary:        Alpha local fail-closed log classification workspace
 License:        MIT
 URL:            https://github.com/silirim/log-classification-pipeline
@@ -59,5 +59,7 @@ systemctl daemon-reload >/dev/null 2>&1 || true
 %attr(0700,log-classify,log-classify) %dir /var/lib/log-classification-pipeline
 
 %changelog
+* Fri Oct 30 2026 Riccardo Melini - 0.1.0-0.alpha.2
+- Maintenance release; move project identifiers to silirim
 * Fri Aug 07 2026 Riccardo Melini - 0.1.0-0.alpha.1
 - Initial alpha package

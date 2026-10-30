@@ -53,7 +53,7 @@ class LinuxPackagingTests(unittest.TestCase):
         self.assertIn("appstreamcli validate --no-net", workflow)
         self.assertIn("python -W error -m unittest discover", workflow)
         self.assertIn(
-            "actions/attest@a1948c3f048ba23858d222213b7c278aabede763",
+            "actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6",
             workflow,
         )
 
@@ -62,9 +62,9 @@ class LinuxPackagingTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/package-linux.yml").read_text(
             encoding="utf-8"
         )
-        self.assertEqual(project["project"]["version"], "0.1.0a1")
-        self.assertIn("RELEASE_VERSION: 0.1.0-alpha.1", workflow)
-        self.assertIn("0.1.0~alpha.1", workflow)
+        self.assertEqual(project["project"]["version"], "0.1.0a2")
+        self.assertIn("RELEASE_VERSION: 0.1.0-alpha.2", workflow)
+        self.assertIn("0.1.0~alpha.2", workflow)
 
     def test_bundle_explicitly_excludes_models_and_ml_runtimes(self) -> None:
         builder = (ROOT / "packaging/build_bundle.sh").read_text(encoding="utf-8")

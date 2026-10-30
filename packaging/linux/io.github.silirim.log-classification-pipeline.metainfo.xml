@@ -18,6 +18,7 @@
   <launchable type="desktop-id">log-classification-pipeline.desktop</launchable>
   <url type="homepage">https://github.com/silirim/log-classification-pipeline</url>
   <releases>
+    <release version="0.1.0-alpha.2" date="2026-10-30" type="development"/>
     <release version="0.1.0-alpha.1" date="2026-08-07" type="development"/>
   </releases>
   <content_rating type="oars-1.1"/>
