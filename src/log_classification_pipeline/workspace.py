@@ -26,6 +26,7 @@ from typing import Any, Iterator
 from urllib.parse import quote
 from uuid import uuid4
 
+from .defaults import DEFAULT_MAX_INPUT_BYTES
 from .prediction import validate_classification_prediction
 
 
@@ -117,7 +118,7 @@ _SCRYPT_SLOTS = threading.BoundedSemaphore(4)
 _SESSION_BYTES = 32
 _DEFAULT_SESSION_HOURS = 8
 _MAX_SESSION_HOURS = 24
-MAX_RAW_PAYLOAD_BYTES = 1_000_000
+MAX_RAW_PAYLOAD_BYTES = DEFAULT_MAX_INPUT_BYTES
 _SCHEMA_VERSION = "2"
 _SCHEMA_VERSION_V1 = "1"
 _EXPECTED_TABLES_V1 = {
@@ -1064,7 +1065,7 @@ class Workspace:
             raise ValueError("role must be admin, analyst, or viewer") from exc
         encoded_password = None if password is None else _password_hash(password)
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, username, role, disabled, created_at FROM users
                    WHERE id = ? AND organization_id = ?""",
@@ -1424,13 +1425,16 @@ class Workspace:
         input_records: int,
         model_name: str,
         *,
+        raw_payload: bytes | None = None,
         now: datetime | None = None,
     ) -> tuple[str, str]:
         """Persist a queued job and return an internal, unhashed worker capability."""
 
         principal = self.authorize_classification(token, now=now)
+        if raw_payload is not None:
+            self._require(principal, Role.ADMIN)
         _validate_input_records(input_records)
-        _validate_source(source_sha256, None)
+        _validate_source(source_sha256, raw_payload)
         _validate_model_name(model_name)
         policy = self.get_retention_policy(token, now=now)
         instant = now or _utc_now()
@@ -1441,10 +1445,11 @@ class Workspace:
                 """INSERT INTO jobs
                    (id, organization_id, created_by, status, model_name,
                     source_sha256, input_records, processed_records,
+                    raw_payload, raw_expires_at,
                     raw_retention_days, result_retention_days,
                     worker_capability_hash, state_version,
                     created_at, queued_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
                 (
                     job_id,
                     principal.organization_id,
@@ -1453,6 +1458,12 @@ class Workspace:
                     model_name,
                     source_sha256,
                     input_records,
+                    raw_payload,
+                    (
+                        None
+                        if raw_payload is None
+                        else _timestamp(instant + timedelta(days=policy.raw_days))
+                    ),
                     policy.raw_days,
                     policy.result_days,
                     _token_hash(capability),
@@ -1469,7 +1480,11 @@ class Workspace:
                 "job",
                 job_id,
                 instant,
-                {"input_records": input_records, "model_name": model_name},
+                {
+                    "input_records": input_records,
+                    "model_name": model_name,
+                    "raw_stored": raw_payload is not None,
+                },
             )
         return job_id, capability
 

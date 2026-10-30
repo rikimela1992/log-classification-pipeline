@@ -48,7 +48,7 @@ from ..inputs import InputFormat, read_input_file, resolve_input_format
 from ..jsonl import ParsedBatch
 from ..model_catalog import RULES_MODEL_NAME, configured_model_catalog
 from ..model_profiles import MODEL_PROFILES
-from ..report import summarize_predictions
+from ..report import group_findings, summarize_predictions
 from ..workspace import (
     AuthenticationError,
     AuthorizationError,
@@ -70,6 +70,7 @@ from .worker import (
 
 _SESSION_COOKIE = "lcp_session"
 _LOGIN_CSRF_COOKIE = "lcp_login_csrf"
+_JOB_PAGE_FINDINGS = 50
 _LOCALE_COOKIE = "lcp_locale"
 _CSRF_HEADER = b"x-csrf-token"
 _SESSION_SECONDS = 8 * 60 * 60
@@ -140,6 +141,25 @@ class UserRequest(BaseModel):
     username: str = Field(min_length=3, max_length=64)
     password: str = Field(min_length=12, max_length=1024)
     role: Role
+
+
+def _findings_from_source(job: Mapping[str, Any]) -> list[dict[str, Any]] | None:
+    """Join a retained source with its results, or show no messages at all."""
+
+    source, results = job.get("raw_payload"), job["results"]
+    if source is None or results is None:
+        return None
+    with tempfile.TemporaryDirectory(prefix="log-classify-web-") as directory:
+        path = Path(directory) / "source.data"
+        path.write_bytes(source)
+        for input_format in ("jsonl", "csv", "text"):
+            try:
+                records = read_input_file(path, input_format=input_format).records
+            except ValueError:
+                continue
+            if len(records) == len(results):
+                return group_findings(records, results, limit=_JOB_PAGE_FINDINGS)
+    return None
 
 
 class UserUpdateRequest(BaseModel):
@@ -688,6 +708,7 @@ def create_app(
         model_name: str,
         token: str,
         input_format: str = "jsonl",
+        keep_source: bool = False,
     ) -> str:
         if model_name not in model_registry:
             raise ValueError("unknown configured model")
@@ -708,6 +729,7 @@ def create_app(
             parsed.source_sha256,
             len(parsed.records),
             input_format,
+            keep_source,
         )
 
     def accepted_job(job_id: str) -> JSONResponse:
@@ -1008,6 +1030,7 @@ def create_app(
     async def classify_file(
         upload: Annotated[UploadFile, File()],
         model: Annotated[str, Form()] = "rules",
+        keep_source: Annotated[bool, Form()] = False,
         token: str = Security(api_token),
     ) -> JSONResponse:
         input_format: InputFormat = resolve_input_format(upload.filename or "")
@@ -1020,6 +1043,7 @@ def create_app(
                 model,
                 token,
                 input_format,
+                keep_source,
             )
         return accepted_job(job_id)
 
@@ -1257,6 +1281,7 @@ def create_app(
         request: Request,
         upload: Annotated[UploadFile, File()],
         model: Annotated[str, Form()] = "rules",
+        keep_source: Annotated[bool, Form()] = False,
     ):
         token = await run_in_threadpool(cookie_token, request)
         input_format: InputFormat = resolve_input_format(upload.filename or "")
@@ -1269,6 +1294,7 @@ def create_app(
                 model,
                 token,
                 input_format,
+                keep_source,
             )
         return RedirectResponse(f"/app/jobs/{job_id}", status_code=303)
 
@@ -1278,7 +1304,8 @@ def create_app(
             token = cookie_token(request)
         except AuthenticationError:
             return RedirectResponse("/app/login", status_code=303)
-        stored_job = workspace.get_job(token, job_id)
+        is_admin = workspace.principal(token).role is Role.ADMIN
+        stored_job = workspace.get_job(token, job_id, include_raw=is_admin)
         status = workspace.get_job_status(token, job_id)
         return render_template(
             request,
@@ -1292,6 +1319,7 @@ def create_app(
                     if stored_job["results"] is not None
                     else None
                 ),
+                "findings": _findings_from_source(stored_job),
                 "principal": workspace.principal(token),
             },
         )

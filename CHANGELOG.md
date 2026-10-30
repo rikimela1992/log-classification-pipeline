@@ -33,6 +33,7 @@ still change interfaces.
 - Remove the Swagger page, which that policy cannot render; OpenAPI JSON remains.
 - Rewrite the rules engine for real log formats and measure it on public logs.
 - Add a job summary, an attention list, and a `report` command.
+- Let admins keep a source file to see messages beside findings.
 
 ## 0.1.0-alpha.1 — 2026-08-08
 

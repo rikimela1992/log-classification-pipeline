@@ -208,11 +208,12 @@ class ApplicationTests(unittest.TestCase):
                 )
             self.assertEqual(predictor_calls, [])
 
+    @mock.patch("log_classification_pipeline.application.MAX_RAW_PAYLOAD_BYTES", 100)
     def test_raw_retention_cap_is_enforced_before_classification(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)
             input_path = root / "input.jsonl"
-            input_path.write_bytes(b'{"message":"synthetic"}\n' * 50_000)
+            input_path.write_bytes(b'{"message":"synthetic"}\n' * 50)
             workspace = Workspace(root / "workspace.sqlite3")
             workspace.bootstrap(
                 "sample-org",

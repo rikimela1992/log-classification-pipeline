@@ -1351,6 +1351,31 @@ class WebApplicationTests(unittest.TestCase):
         items = Workspace(self.database).list_users(token)
         return {item["username"]: item for item in items}
 
+    def test_kept_source_shows_escaped_messages_to_admins_only(self) -> None:
+        token = self.api_login("owner", PASSWORD)
+        message = "2026-10-30T12:00:00Z ERROR <b>service</b> crashed"
+        accepted = self.client.post(
+            "/api/v1/classifications/file",
+            headers=self.bearer(token),
+            data={"keep_source": "true"},
+            files={"upload": ("sample.log", f"{message}\n".encode(), "text/plain")},
+        )
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        job_url = f"/app/jobs/{accepted.json()['job_id']}"
+        self.wait_for_job(accepted.json()["job_id"], token)
+        viewer = self.client.post(
+            "/api/v1/classifications/file",
+            headers=self.bearer(self.api_login("analyst", "analyst-password-value")),
+            data={"keep_source": "true"},
+            files={"upload": ("sample.log", b"service started\n", "text/plain")},
+        )
+        self.assertEqual(viewer.status_code, 403)
+
+        self.ui_login()
+        page = self.client.get(job_url)
+        self.assertIn("&lt;b&gt;service&lt;/b&gt; crashed", page.text)
+        self.assertNotIn("<b>service</b>", page.text)
+
     def test_ui_respects_its_content_security_policy(self) -> None:
         page = self.client.get("/app/login")
         self.assertNotRegex(page.text, r"<[^>]+\son[a-z]+=")

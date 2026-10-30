@@ -110,7 +110,7 @@
   "js.unreachable": "Il servizio locale non è raggiungibile. Non è stato presunto alcun successo.",
   "job.summary": "Riepilogo",
   "job.attention": "Da controllare",
-  "job.attention_help": "I numeri di record seguono l'ordine del file. I messaggi originali non vengono salvati: il comando report li mostra accanto a ogni risultato.",
+  "job.attention_help": "I numeri di record seguono l'ordine del file. Spunta \"conserva il file\" al caricamento per vedere qui i messaggi, oppure usa il comando report.",
   "job.attention_truncated": "Sono mostrati i primi {shown}. Esporta il job per l'elenco completo.",
   "job.attention_empty": "In questo job non c'è nulla da controllare.",
   "job.abstained_count": "Astensione su {count} record: le regole non hanno potuto collocarli con sicurezza.",
@@ -119,5 +119,8 @@
   "severity.error": "Errore",
   "severity.warning": "Avviso",
   "severity.info": "Informazione",
-  "severity.routine": "Routine"
+  "severity.routine": "Routine",
+  "classify.keep_source": "Conserva il file per mostrare i messaggi nei risultati (fino alla scadenza della retention)",
+  "job.count": "Quantità",
+  "job.message": "Messaggio"
 }

@@ -27,6 +27,11 @@ Open `http://127.0.0.1:8080/app`. The command binds only to `127.0.0.1`, disable
 proxy-header trust and access logging, and refuses an unknown or unsafe
 workspace database. Stop it with `Ctrl-C`.
 
+An administrator can tick **keep the file** on upload (API: `keep_source=true`).
+The source then stays in the unencrypted database until raw retention expires, and
+the job page shows the original message next to each finding. Without it, or for
+other roles, the page shows record numbers only.
+
 The default application limit is 25 MiB and 25,000 records per file. The queue
 admits at most eight jobs and 50 MiB of raw bytes in aggregate, including the
 running job, and reports progress every 16 records. These values are explicit

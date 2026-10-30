@@ -110,7 +110,7 @@
   "js.unreachable": "The local service could not be reached. No success was assumed.",
   "job.summary": "Summary",
   "job.attention": "Needs attention",
-  "job.attention_help": "Record numbers follow the order of your file. Original messages are not stored; the report command shows them next to each finding.",
+  "job.attention_help": "Record numbers follow the order of your file. Tick \"keep the file\" on upload to see messages here, or use the report command.",
   "job.attention_truncated": "Showing the first {shown}. Export the job for the complete list.",
   "job.attention_empty": "Nothing in this job needs attention.",
   "job.abstained_count": "Abstained on {count} records: the rules could not place them confidently.",
@@ -119,5 +119,8 @@
   "severity.error": "Error",
   "severity.warning": "Warning",
   "severity.info": "Info",
-  "severity.routine": "Routine"
+  "severity.routine": "Routine",
+  "classify.keep_source": "Keep the file so findings show their messages (until retention expires)",
+  "job.count": "Count",
+  "job.message": "Message"
 }

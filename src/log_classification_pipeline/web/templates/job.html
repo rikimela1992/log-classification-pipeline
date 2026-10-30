@@ -40,7 +40,14 @@
 </section>
 <section class="panel">
   <div class="section-heading"><h2>{{ t("job.attention") }}</h2><strong>{{ summary.attention_total }}</strong></div>
-  {% if summary.attention %}
+  {% if findings %}
+  <div class="table-scroll"><table class="findings">
+    <thead><tr><th>{{ t("job.count") }}</th><th>{{ t("job.severity") }}</th><th>{{ t("job.subsystem") }}</th><th>{{ t("job.message") }}</th></tr></thead>
+    <tbody>
+    {% for item in findings %}<tr><td>{{ item.count }}</td><td><span class="severity-tag severity-{{ item.severity }}">{{ t("severity." + item.severity) }}</span></td><td>{{ item.subsystem }}</td><td><code>{{ item.example }}</code></td></tr>{% endfor %}
+    </tbody>
+  </table></div>
+  {% elif summary.attention %}
   <p class="muted">{{ t("job.attention_help") }}</p>
   <div class="table-scroll"><table>
     <thead><tr><th>{{ t("job.record") }}</th><th>{{ t("job.severity") }}</th><th>{{ t("job.subsystem") }}</th><th></th></tr></thead>
@@ -48,7 +55,7 @@
     {% for item in summary.attention %}<tr><td>{{ item.record }}</td><td><span class="severity-tag severity-{{ item.severity }}">{{ t("severity." + item.severity) }}</span></td><td>{{ item.subsystem }}</td><td>{% if item.abstained %}<span class="abstained">{{ t("job.abstained") }}</span>{% endif %}</td></tr>{% endfor %}
     </tbody>
   </table></div>
-  {% if summary.attention_total > summary.attention|length %}<p class="muted">{{ t("job.attention_truncated", shown=summary.attention|length) }}</p>{% endif %}
+  {% if not findings and summary.attention_total > summary.attention|length %}<p class="muted">{{ t("job.attention_truncated", shown=summary.attention|length) }}</p>{% endif %}
   {% else %}<p class="empty">{{ t("job.attention_empty") }}</p>{% endif %}
 </section>
 {% endif %}

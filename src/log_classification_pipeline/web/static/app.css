@@ -93,3 +93,5 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
 .subsystem-list { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .subsystem-list li { display: flex; gap: 8px; padding: 4px 10px; border: 1px solid var(--line); border-radius: 999px; }
 .table-scroll { overflow-x: auto; }
+.findings code { overflow-wrap: anywhere; font-size: 13px; }
+.checkbox { display: flex; gap: 8px; align-items: center; }

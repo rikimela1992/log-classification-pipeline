@@ -16,6 +16,7 @@ from unittest import mock
 from log_classification_pipeline import workspace as workspace_module
 from log_classification_pipeline.contracts import PredictionContractError
 from log_classification_pipeline.workspace import (
+    MAX_RAW_PAYLOAD_BYTES,
     AuthenticationError,
     AuthorizationError,
     ConflictError,
@@ -457,7 +458,7 @@ class WorkspaceTestCase(unittest.TestCase):
                         1,
                         now=NOW,
                     )
-        excessive_payload = b"x" * 1_000_001
+        excessive_payload = b"x" * (MAX_RAW_PAYLOAD_BYTES + 1)
         with self.assertRaises(ValueError):
             self.workspace.create_job(
                 self.admin_token,

@@ -110,7 +110,7 @@
   "js.unreachable": "No se pudo contactar con el servicio local. No se supuso ningún éxito.",
   "job.summary": "Resumen",
   "job.attention": "Por revisar",
-  "job.attention_help": "Los números siguen el orden de su archivo. Los mensajes originales no se guardan: el comando report los muestra junto a cada resultado.",
+  "job.attention_help": "Los números siguen el orden de su archivo. Marque «conservar el archivo» al subirlo para ver aquí los mensajes, o use el comando report.",
   "job.attention_truncated": "Se muestran los primeros {shown}. Exporte el trabajo para ver la lista completa.",
   "job.attention_empty": "No hay nada que revisar en este trabajo.",
   "job.abstained_count": "Abstención en {count} registros: las reglas no pudieron clasificarlos con seguridad.",
@@ -119,5 +119,8 @@
   "severity.error": "Error",
   "severity.warning": "Advertencia",
   "severity.info": "Información",
-  "severity.routine": "Rutina"
+  "severity.routine": "Rutina",
+  "classify.keep_source": "Conservar el archivo para mostrar los mensajes (hasta que venza la retención)",
+  "job.count": "Cantidad",
+  "job.message": "Mensaje"
 }

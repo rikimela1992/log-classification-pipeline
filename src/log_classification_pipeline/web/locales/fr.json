@@ -110,7 +110,7 @@
   "js.unreachable": "Le service local est inaccessible. Aucun succès n'a été supposé.",
   "job.summary": "Résumé",
   "job.attention": "À vérifier",
-  "job.attention_help": "Les numéros suivent l'ordre de votre fichier. Les messages d'origine ne sont pas conservés : la commande report les affiche à côté de chaque résultat.",
+  "job.attention_help": "Les numéros suivent l'ordre de votre fichier. Cochez « conserver le fichier » au dépôt pour voir ici les messages, ou utilisez la commande report.",
   "job.attention_truncated": "Affichage des {shown} premiers. Exportez la tâche pour la liste complète.",
   "job.attention_empty": "Rien à vérifier dans cette tâche.",
   "job.abstained_count": "Abstention sur {count} enregistrements : les règles n'ont pas pu les classer avec assurance.",
@@ -119,5 +119,8 @@
   "severity.error": "Erreur",
   "severity.warning": "Avertissement",
   "severity.info": "Information",
-  "severity.routine": "Routine"
+  "severity.routine": "Routine",
+  "classify.keep_source": "Conserver le fichier pour afficher les messages (jusqu'à l'expiration de la rétention)",
+  "job.count": "Nombre",
+  "job.message": "Message"
 }

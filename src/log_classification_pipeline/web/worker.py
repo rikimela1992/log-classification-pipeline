@@ -151,6 +151,7 @@ class LocalClassificationQueue:
         source_sha256: str,
         input_records: int,
         input_format: str = "jsonl",
+        keep_source: bool = False,
     ) -> str:
         if model_name not in self.predictors:
             raise ValueError("unknown configured model")
@@ -176,6 +177,7 @@ class LocalClassificationQueue:
                     source_sha256,
                     input_records,
                     model_name,
+                    raw_payload=payload if keep_source else None,
                 )
                 queued_payload = bytearray(payload)
                 with self._payload_lock:
