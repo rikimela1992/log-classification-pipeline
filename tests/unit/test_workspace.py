@@ -155,6 +155,64 @@ class WorkspaceTestCase(unittest.TestCase):
         with self.assertRaises(AuthenticationError):
             self.workspace.verify_csrf(self.admin_token, first_csrf, now=NOW)
 
+    def test_bootstrap_rejects_bad_input_without_creating_a_workspace(self) -> None:
+        database = Path(self.temporary_directory.name) / "fresh.sqlite3"
+        with self.assertRaises(ValueError):
+            Workspace(database).bootstrap("sample-org", "owner", "short")
+        self.assertFalse(database.exists())
+
+    def test_update_user_revokes_sessions_and_enforces_role_changes(self) -> None:
+        analyst_token = self.create_user_and_login("analyst", Role.ANALYST)
+        analyst_id = next(
+            item["id"]
+            for item in self.workspace.list_users(self.admin_token, now=NOW)
+            if item["username"] == "analyst"
+        )
+        with self.assertRaises(AuthorizationError):
+            self.workspace.update_user(analyst_token, analyst_id, disabled=True, now=NOW)
+
+        updated = self.workspace.update_user(
+            self.admin_token, analyst_id, role=Role.VIEWER, disabled=True, now=NOW
+        )
+        self.assertEqual((updated["role"], updated["disabled"]), ("viewer", 1))
+        with self.assertRaises(AuthenticationError):
+            self.workspace.principal(analyst_token, now=NOW)
+        with self.assertRaises(AuthenticationError):
+            self.workspace.login("sample-org", "analyst", PASSWORD, now=NOW)
+
+        self.workspace.update_user(
+            self.admin_token,
+            analyst_id,
+            disabled=False,
+            password="replacement-password",
+            now=NOW,
+        )
+        with self.assertRaises(AuthenticationError):
+            self.workspace.login("sample-org", "analyst", PASSWORD, now=NOW)
+        self.workspace.login("sample-org", "analyst", "replacement-password", now=NOW)
+        events = self.workspace.list_audit_events(self.admin_token, now=NOW)
+        self.assertNotIn("replacement-password", repr(events))
+        self.assertIn("user.update", {event["action"] for event in events})
+
+    def test_update_user_preserves_last_active_administrator(self) -> None:
+        owner_id = self.workspace.principal(self.admin_token, now=NOW).user_id
+        for change in ({"disabled": True}, {"role": Role.VIEWER}):
+            with self.subTest(change=change):
+                with self.assertRaises(ConflictError):
+                    self.workspace.update_user(
+                        self.admin_token, owner_id, now=NOW, **change
+                    )
+        self.workspace.principal(self.admin_token, now=NOW)
+
+    def test_update_user_requires_a_change_and_an_organization_member(self) -> None:
+        owner_id = self.workspace.principal(self.admin_token, now=NOW).user_id
+        with self.assertRaises(ValueError):
+            self.workspace.update_user(self.admin_token, owner_id, now=NOW)
+        with self.assertRaises(NotFoundError):
+            self.workspace.update_user(
+                self.admin_token, "missing", disabled=True, now=NOW
+            )
+
     def test_user_listing_is_admin_only_and_bounded(self) -> None:
         analyst_token = self.create_user_and_login("analyst", Role.ANALYST)
         users = self.workspace.list_users(self.admin_token, now=NOW)

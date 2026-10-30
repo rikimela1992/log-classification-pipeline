@@ -71,9 +71,17 @@
 <div class="two-column">
   <section class="panel">
     <h2>{{ t("users.heading") }}</h2>
-    <ul class="clean-list">
-      {% for user in users %}<li><span>{{ user.username }}</span><span>{{ t("role." + user.role) }}</span></li>{% endfor %}
-    </ul>
+    {% for user in users %}
+    <details class="user-entry">
+      <summary><span>{{ user.username }}</span><span>{{ t("role." + user.role) }}{% if user.disabled %} · {{ t("users.disabled") }}{% endif %}</span></summary>
+      <form action="/app/admin/users/{{ user.id }}" method="post" class="stack compact" data-secure-form>
+        <label>{{ t("users.role") }}<select name="role">{% for role in ("viewer", "analyst", "admin") %}<option value="{{ role }}" {% if role == user.role %}selected{% endif %}>{{ t("role." + role) }}</option>{% endfor %}</select></label>
+        <label>{{ t("users.new_password") }}<input name="password" type="password" minlength="12" maxlength="1024" autocomplete="new-password"></label>
+        <label><input name="disabled" type="checkbox" value="true" {% if user.disabled %}checked{% endif %}> {{ t("users.disabled") }}</label>
+        <button class="button secondary" type="submit">{{ t("users.save") }}</button>
+      </form>
+    </details>
+    {% endfor %}
     <h3>{{ t("users.add") }}</h3>
     <form action="/app/admin/users" method="post" class="stack compact" data-secure-form>
       <label>{{ t("users.username") }}<input name="username" required minlength="3" maxlength="64"></label>

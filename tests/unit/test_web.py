@@ -1102,6 +1102,69 @@ class WebApplicationTests(unittest.TestCase):
             self.assertNotIn("synthetic internal detail", status.text)
             self.assertNotIn("Traceback", status.text)
 
+    def test_admin_can_disable_a_user_through_api_and_ui(self) -> None:
+        token = self.api_login("owner", PASSWORD)
+        created = self.client.post(
+            "/api/v1/admin/users",
+            headers=self.bearer(token),
+            json={
+                "username": "observer",
+                "password": "observer-password-value",
+                "role": "viewer",
+            },
+        )
+        user_id = created.json()["id"]
+        observer = self.api_login("observer", "observer-password-value")
+
+        denied = self.client.patch(
+            f"/api/v1/admin/users/{user_id}",
+            headers=self.bearer(observer),
+            json={"disabled": True},
+        )
+        self.assertEqual(denied.status_code, 403)
+        updated = self.client.patch(
+            f"/api/v1/admin/users/{user_id}",
+            headers=self.bearer(token),
+            json={"disabled": True},
+        )
+        self.assertEqual(updated.status_code, 200, updated.text)
+        self.assertEqual(updated.json()["disabled"], 1)
+        revoked = self.client.get("/api/v1/me", headers=self.bearer(observer))
+        self.assertEqual(revoked.status_code, 401)
+
+        self.ui_login()
+        dashboard = self.client.get("/app")
+        self.assertIn(f'action="/app/admin/users/{user_id}"', dashboard.text)
+        restored = self.client.post(
+            f"/app/admin/users/{user_id}",
+            data={"role": "analyst"},
+            headers={
+                "Origin": "http://testserver",
+                "X-CSRF-Token": re.search(
+                    r'name="csrf-token" content="([^"]+)"', dashboard.text
+                ).group(1),
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(restored.status_code, 303, restored.text)
+        users = self.workspace_users()
+        self.assertEqual(users["observer"]["role"], "analyst")
+        self.assertEqual(users["observer"]["disabled"], 0)
+
+    def workspace_users(self) -> dict[str, dict[str, object]]:
+        token, _principal = Workspace(self.database).login(
+            "sample-org", "owner", PASSWORD
+        )
+        items = Workspace(self.database).list_users(token)
+        return {item["username"]: item for item in items}
+
+    def test_ui_respects_its_content_security_policy(self) -> None:
+        page = self.client.get("/app/login")
+        self.assertNotRegex(page.text, r"<[^>]+\son[a-z]+=")
+        self.assertIn("data-auto-submit", page.text)
+        self.assertEqual(self.client.get("/api/v1/docs").status_code, 404)
+        self.assertEqual(self.client.get("/api/v1/openapi.json").status_code, 200)
+
     def test_admin_user_retention_and_request_limit(self) -> None:
         token = self.api_login("owner", PASSWORD)
         created = self.client.post(

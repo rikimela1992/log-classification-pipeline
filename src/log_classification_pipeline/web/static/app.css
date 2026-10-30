@@ -77,3 +77,6 @@ th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spa
   .hero, .section-heading { align-items: flex-start; flex-direction: column; }
   .identity > span { display: none; }
 }
+.user-entry { border-bottom: 1px solid rgba(127, 127, 127, 0.25); padding: 8px 0; }
+.user-entry summary { cursor: pointer; display: flex; gap: 12px; justify-content: space-between; }
+.user-entry form { margin-top: 10px; }

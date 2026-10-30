@@ -135,6 +135,14 @@ class UserRequest(BaseModel):
     role: Role
 
 
+class UserUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    role: Role | None = None
+    disabled: bool | None = None
+    password: str | None = Field(default=None, min_length=12, max_length=1024)
+
+
 class RetentionRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -547,7 +555,7 @@ def create_app(
     app = FastAPI(
         title="Log Classification Pipeline",
         version="0.1.0-alpha.1",
-        docs_url="/api/v1/docs",
+        docs_url=None,
         redoc_url=None,
         openapi_url="/api/v1/openapi.json",
         lifespan=lifespan,
@@ -1004,6 +1012,20 @@ def create_app(
         )
         return {"id": user_id, "role": payload.role.value, "username": payload.username}
 
+    @app.patch("/api/v1/admin/users/{user_id}")
+    def update_user(
+        user_id: str,
+        payload: UserUpdateRequest,
+        token: str = Security(api_token),
+    ) -> dict[str, Any]:
+        return workspace.update_user(
+            token,
+            user_id,
+            role=payload.role,
+            disabled=payload.disabled,
+            password=payload.password,
+        )
+
     @app.get("/api/v1/admin/retention")
     def retention(token: str = Security(api_token)) -> dict[str, int]:
         workspace.authorize_admin(token)
@@ -1288,6 +1310,24 @@ def create_app(
     ):
         token = cookie_token(request)
         workspace.create_user(token, username, password, role)
+        return RedirectResponse("/app", status_code=303)
+
+    @app.post("/app/admin/users/{user_id}", include_in_schema=False)
+    def update_user_ui(
+        request: Request,
+        user_id: str,
+        role: Annotated[Role, Form()],
+        disabled: Annotated[bool, Form()] = False,
+        password: Annotated[str, Form()] = "",
+    ):
+        token = cookie_token(request)
+        workspace.update_user(
+            token,
+            user_id,
+            role=role,
+            disabled=disabled,
+            password=password or None,
+        )
         return RedirectResponse("/app", status_code=303)
 
     @app.post("/app/admin/retention", include_in_schema=False)

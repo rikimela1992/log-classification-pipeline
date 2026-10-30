@@ -631,10 +631,10 @@ class Workspace:
     ) -> tuple[str, str]:
         """Create the first organization and administrator in an empty workspace."""
 
-        self.initialize()
         organization_slug = _normalize_identifier(organization, name="organization")
         normalized_username = _normalize_identifier(username, name="username")
         encoded_password = _password_hash(password)
+        self.initialize()
         instant = now or _utc_now()
         organization_id = str(uuid4())
         user_id = str(uuid4())
@@ -969,6 +969,85 @@ class Workspace:
         except sqlite3.IntegrityError as exc:
             raise ConflictError("username already exists in this organization") from exc
         return user_id
+
+    def update_user(
+        self,
+        token: str,
+        user_id: str,
+        *,
+        role: Role | str | None = None,
+        disabled: bool | None = None,
+        password: str | None = None,
+        now: datetime | None = None,
+    ) -> dict[str, Any]:
+        """Change one account and revoke its sessions in a single transaction."""
+
+        principal = self.authorize_admin(token, now=now)
+        if role is None and disabled is None and password is None:
+            raise ValueError("at least one change is required")
+        if disabled is not None and not isinstance(disabled, bool):
+            raise ValueError("disabled must be a boolean")
+        try:
+            parsed_role = None if role is None else Role(role)
+        except ValueError as exc:
+            raise ValueError("role must be admin, analyst, or viewer") from exc
+        encoded_password = None if password is None else _password_hash(password)
+        instant = now or _utc_now()
+        with self._connect() as connection:
+            row = connection.execute(
+                """SELECT id, username, role, disabled, created_at FROM users
+                   WHERE id = ? AND organization_id = ?""",
+                (user_id, principal.organization_id),
+            ).fetchone()
+            if row is None:
+                raise NotFoundError("user was not found")
+            new_role = parsed_role.value if parsed_role is not None else row["role"]
+            new_disabled = int(row["disabled"] if disabled is None else disabled)
+            was_active_admin = row["role"] == Role.ADMIN.value and not row["disabled"]
+            stays_active_admin = new_role == Role.ADMIN.value and not new_disabled
+            if was_active_admin and not stays_active_admin:
+                other_admin = connection.execute(
+                    """SELECT 1 FROM users
+                       WHERE organization_id = ? AND id != ? AND role = ?
+                         AND disabled = 0 LIMIT 1""",
+                    (principal.organization_id, user_id, Role.ADMIN.value),
+                ).fetchone()
+                if other_admin is None:
+                    raise ConflictError("the last active administrator must remain")
+            changed = sorted(
+                name
+                for name, is_changed in (
+                    ("disabled", new_disabled != row["disabled"]),
+                    ("password", encoded_password is not None),
+                    ("role", new_role != row["role"]),
+                )
+                if is_changed
+            )
+            connection.execute(
+                """UPDATE users
+                   SET role = ?, disabled = ?, password_hash = COALESCE(?, password_hash)
+                   WHERE id = ?""",
+                (new_role, new_disabled, encoded_password, user_id),
+            )
+            if changed:
+                connection.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+                self._audit(
+                    connection,
+                    principal.organization_id,
+                    principal.user_id,
+                    "user.update",
+                    "user",
+                    user_id,
+                    instant,
+                    {"changed": changed},
+                )
+        return {
+            "id": row["id"],
+            "username": row["username"],
+            "role": new_role,
+            "disabled": new_disabled,
+            "created_at": row["created_at"],
+        }
 
     def list_users(
         self,
