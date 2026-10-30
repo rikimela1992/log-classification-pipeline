@@ -151,6 +151,7 @@ class LocalClassificationQueue:
         source_sha256: str,
         input_records: int,
         input_format: str = "jsonl",
+        keep_source: bool = False,
     ) -> str:
         if model_name not in self.predictors:
             raise ValueError("unknown configured model")
@@ -176,6 +177,7 @@ class LocalClassificationQueue:
                     source_sha256,
                     input_records,
                     model_name,
+                    raw_payload=payload if keep_source else None,
                 )
                 queued_payload = bytearray(payload)
                 with self._payload_lock:
@@ -199,13 +201,25 @@ class LocalClassificationQueue:
                 raise
         return job_id
 
+    def _require_capacity(self, payload_bytes: int) -> None:
+        if (
+            self._admitted >= self.max_admitted_jobs
+            or self._admitted_bytes + payload_bytes > self.max_admitted_bytes
+        ):
+            raise QueueCapacityError("classification queue is full")
+
+    def ensure_capacity(self, payload_bytes: int) -> None:
+        """Refuse early when a job of this size would not fit right now.
+
+        This reserves nothing: `submit` still decides atomically.
+        """
+
+        with self._admission_lock:
+            self._require_capacity(payload_bytes)
+
     def _reserve_admission(self, payload_bytes: int) -> None:
         with self._admission_lock:
-            if (
-                self._admitted >= self.max_admitted_jobs
-                or self._admitted_bytes + payload_bytes > self.max_admitted_bytes
-            ):
-                raise QueueCapacityError("classification queue is full")
+            self._require_capacity(payload_bytes)
             self._admitted += 1
             self._admitted_bytes += payload_bytes
             self._idle.clear()

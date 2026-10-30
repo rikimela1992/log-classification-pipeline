@@ -14,16 +14,19 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from stat import S_ISREG
 from typing import Any, Iterator
 from urllib.parse import quote
 from uuid import uuid4
 
+from .defaults import DEFAULT_MAX_INPUT_BYTES
 from .prediction import validate_classification_prediction
 
 
@@ -103,13 +106,19 @@ class PurgeSummary:
 _IDENTIFIER_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}\Z")
 _PASSWORD_MIN_LENGTH = 12
 _PASSWORD_MAX_LENGTH = 1024
-_SCRYPT_N = 2**14
+_SCRYPT_DEFAULT_N = 2**17
+# Internal override point: the test package lowers this to stay fast.
+_SCRYPT_N = _SCRYPT_DEFAULT_N
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+# Stored parameters above this ceiling are refused rather than allocated.
+_SCRYPT_MAX_MEMORY_BYTES = 256 * 1024 * 1024
+# Each derivation holds 128 MiB; bound what concurrent logins can pin.
+_SCRYPT_SLOTS = threading.BoundedSemaphore(4)
 _SESSION_BYTES = 32
 _DEFAULT_SESSION_HOURS = 8
 _MAX_SESSION_HOURS = 24
-_MAX_RAW_PAYLOAD_BYTES = 1_000_000
+MAX_RAW_PAYLOAD_BYTES = DEFAULT_MAX_INPUT_BYTES
 _SCHEMA_VERSION = "2"
 _SCHEMA_VERSION_V1 = "1"
 _EXPECTED_TABLES_V1 = {
@@ -166,69 +175,101 @@ def _validate_password(password: str) -> None:
         )
 
 
+def _scrypt_memory_bytes(n: int, r: int, p: int) -> int:
+    return 128 * r * (n + p + 2)
+
+
+def _scrypt(
+    secret: bytes,
+    salt: bytes,
+    n: int,
+    r: int,
+    p: int,
+    *,
+    dklen: int = 64,
+) -> bytes:
+    with _SCRYPT_SLOTS:
+        return hashlib.scrypt(
+            secret,
+            salt=salt,
+            n=n,
+            r=r,
+            p=p,
+            dklen=dklen,
+            maxmem=_scrypt_memory_bytes(n, r, p),
+        )
+
+
+def _encode_password_hash(n: int, r: int, p: int, salt: bytes, derived: bytes) -> str:
+    return "$".join(("scrypt", str(n), str(r), str(p), salt.hex(), derived.hex()))
+
+
 def _password_hash(password: str) -> str:
     _validate_password(password)
+    return _derive_password_hash(password)
+
+
+def _derive_password_hash(password: str) -> str:
     salt = secrets.token_bytes(16)
-    derived = hashlib.scrypt(
+    derived = _scrypt(
         password.encode("utf-8"),
-        salt=salt,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
+        salt,
+        _SCRYPT_N,
+        _SCRYPT_R,
+        _SCRYPT_P,
     )
-    return "$".join(
-        (
-            "scrypt",
-            str(_SCRYPT_N),
-            str(_SCRYPT_R),
-            str(_SCRYPT_P),
-            salt.hex(),
-            derived.hex(),
-        )
-    )
+    return _encode_password_hash(_SCRYPT_N, _SCRYPT_R, _SCRYPT_P, salt, derived)
 
 
 def _password_matches(password: str, encoded: str) -> bool:
+    """Verify with the parameters stored in the hash, within fixed bounds."""
+
     try:
         algorithm, raw_n, raw_r, raw_p, raw_salt, raw_derived = encoded.split("$")
         if algorithm != "scrypt":
             return False
+        n, r, p = int(raw_n), int(raw_r), int(raw_p)
+        if (
+            min(n, r, p) < 1
+            or _scrypt_memory_bytes(n, r, p) > _SCRYPT_MAX_MEMORY_BYTES
+        ):
+            return False
         expected = bytes.fromhex(raw_derived)
-        observed = hashlib.scrypt(
+        observed = _scrypt(
             password.encode("utf-8"),
-            salt=bytes.fromhex(raw_salt),
-            n=int(raw_n),
-            r=int(raw_r),
-            p=int(raw_p),
+            bytes.fromhex(raw_salt),
+            n,
+            r,
+            p,
             dklen=len(expected),
         )
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return False
     return hmac.compare_digest(observed, expected)
 
 
-def _dummy_password_hash() -> str:
+def _password_needs_rehash(encoded: str) -> bool:
+    """Report a verified hash whose stored cost is below the current one."""
+
+    _algorithm, raw_n, raw_r, raw_p, _salt, _derived = encoded.split("$")
+    return (
+        int(raw_n) < _SCRYPT_N
+        or int(raw_r) < _SCRYPT_R
+        or int(raw_p) < _SCRYPT_P
+    )
+
+
+@lru_cache(maxsize=4)
+def _dummy_password_hash(n: int, r: int, p: int) -> str:
+    # Derived on first use so that commands that never log in do not pay for it.
     salt = b"local-auth-dummy"
-    derived = hashlib.scrypt(
-        b"dummy-password-value",
-        salt=salt,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
+    return _encode_password_hash(
+        n,
+        r,
+        p,
+        salt,
+        _scrypt(b"dummy-password-value", salt, n, r, p),
     )
-    return "$".join(
-        (
-            "scrypt",
-            str(_SCRYPT_N),
-            str(_SCRYPT_R),
-            str(_SCRYPT_P),
-            salt.hex(),
-            derived.hex(),
-        )
-    )
-
-
-_DUMMY_PASSWORD_HASH = _dummy_password_hash()
 
 
 def _token_hash(token: str) -> str:
@@ -248,8 +289,8 @@ def _validate_source(source_sha256: str, raw_payload: bytes | None) -> None:
         raise ValueError("source_sha256 must be 64 lowercase hexadecimal characters")
     if raw_payload is not None and not isinstance(raw_payload, bytes):
         raise TypeError("raw_payload must be bytes or None")
-    if raw_payload is not None and len(raw_payload) > _MAX_RAW_PAYLOAD_BYTES:
-        raise ValueError(f"raw_payload must not exceed {_MAX_RAW_PAYLOAD_BYTES} bytes")
+    if raw_payload is not None and len(raw_payload) > MAX_RAW_PAYLOAD_BYTES:
+        raise ValueError(f"raw_payload must not exceed {MAX_RAW_PAYLOAD_BYTES} bytes")
     if raw_payload is not None and not hmac.compare_digest(
         hashlib.sha256(raw_payload).hexdigest(), source_sha256
     ):
@@ -303,7 +344,14 @@ class Workspace:
         self,
         *,
         require_schema: bool = True,
+        immediate: bool = False,
     ) -> Iterator[sqlite3.Connection]:
+        """Open a checked connection; `immediate` takes the write lock up front.
+
+        The legacy sqlite3 transaction mode begins only at the first write, so a
+        read-then-write sequence needs `immediate` to see the state it changes.
+        """
+
         self._validate_database_file()
         database_uri = f"file:{quote(str(self.database_path.absolute()))}?mode=rw"
         connection = sqlite3.connect(
@@ -339,6 +387,8 @@ class Workspace:
                 connection.execute("PRAGMA journal_mode = DELETE")
                 connection.execute("PRAGMA synchronous = FULL")
             with connection:
+                if immediate:
+                    connection.execute("BEGIN IMMEDIATE")
                 yield connection
         finally:
             connection.close()
@@ -753,7 +803,9 @@ class Workspace:
             )
             password_is_valid = _password_matches(
                 password if password_input_valid else "invalid-password-input",
-                row["password_hash"] if row is not None else _DUMMY_PASSWORD_HASH,
+                row["password_hash"]
+                if row is not None
+                else _dummy_password_hash(_SCRYPT_N, _SCRYPT_R, _SCRYPT_P),
             )
             if (
                 row is None
@@ -777,6 +829,20 @@ class Workspace:
                     )
                 authentication_failed = True
             else:
+                rehashed = _password_needs_rehash(row["password_hash"])
+                if rehashed:
+                    # Compare-and-swap: a concurrent password reset must win.
+                    cursor = connection.execute(
+                        "UPDATE users SET password_hash = ? "
+                        "WHERE id = ? AND password_hash = ?",
+                        (
+                            _derive_password_hash(password),
+                            row["id"],
+                            row["password_hash"],
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise AuthenticationError("invalid credentials")
                 token = secrets.token_urlsafe(_SESSION_BYTES)
                 connection.execute(
                     """INSERT INTO sessions
@@ -797,6 +863,7 @@ class Workspace:
                     "session",
                     None,
                     instant,
+                    {"password_rehashed": True} if rehashed else None,
                 )
                 principal = Principal(
                     user_id=row["id"],
@@ -820,6 +887,7 @@ class Workspace:
             digest = _token_hash(token)
         except UnicodeEncodeError as exc:
             raise AuthenticationError("invalid session") from exc
+        principal: Principal | None = None
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT sessions.expires_at, users.id, users.organization_id,
@@ -834,13 +902,17 @@ class Workspace:
                     connection.execute(
                         "DELETE FROM sessions WHERE token_hash = ?", (digest,)
                     )
-                raise AuthenticationError("invalid or expired session")
-            return Principal(
-                user_id=row["id"],
-                organization_id=row["organization_id"],
-                username=row["username"],
-                role=Role(row["role"]),
-            )
+            else:
+                principal = Principal(
+                    user_id=row["id"],
+                    organization_id=row["organization_id"],
+                    username=row["username"],
+                    role=Role(row["role"]),
+                )
+        # Raised only now: inside the block it would roll the DELETE back.
+        if principal is None:
+            raise AuthenticationError("invalid or expired session")
+        return principal
 
     def logout(self, token: str, *, now: datetime | None = None) -> None:
         principal = self.principal(token, now=now)
@@ -993,7 +1065,7 @@ class Workspace:
             raise ValueError("role must be admin, analyst, or viewer") from exc
         encoded_password = None if password is None else _password_hash(password)
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, username, role, disabled, created_at FROM users
                    WHERE id = ? AND organization_id = ?""",
@@ -1211,7 +1283,7 @@ class Workspace:
         except (TypeError, ValueError) as exc:
             raise ValueError("results must be JSON serializable") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             job_row = connection.execute(
                 """SELECT input_records, result_retention_days FROM jobs
                    WHERE id = ? AND organization_id = ? AND status = ?
@@ -1353,13 +1425,16 @@ class Workspace:
         input_records: int,
         model_name: str,
         *,
+        raw_payload: bytes | None = None,
         now: datetime | None = None,
     ) -> tuple[str, str]:
         """Persist a queued job and return an internal, unhashed worker capability."""
 
         principal = self.authorize_classification(token, now=now)
+        if raw_payload is not None:
+            self._require(principal, Role.ADMIN)
         _validate_input_records(input_records)
-        _validate_source(source_sha256, None)
+        _validate_source(source_sha256, raw_payload)
         _validate_model_name(model_name)
         policy = self.get_retention_policy(token, now=now)
         instant = now or _utc_now()
@@ -1370,10 +1445,11 @@ class Workspace:
                 """INSERT INTO jobs
                    (id, organization_id, created_by, status, model_name,
                     source_sha256, input_records, processed_records,
+                    raw_payload, raw_expires_at,
                     raw_retention_days, result_retention_days,
                     worker_capability_hash, state_version,
                     created_at, queued_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, 0, ?, ?, ?)""",
+                   VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, 0, ?, ?, ?)""",
                 (
                     job_id,
                     principal.organization_id,
@@ -1382,6 +1458,12 @@ class Workspace:
                     model_name,
                     source_sha256,
                     input_records,
+                    raw_payload,
+                    (
+                        None
+                        if raw_payload is None
+                        else _timestamp(instant + timedelta(days=policy.raw_days))
+                    ),
                     policy.raw_days,
                     policy.result_days,
                     _token_hash(capability),
@@ -1398,7 +1480,11 @@ class Workspace:
                 "job",
                 job_id,
                 instant,
-                {"input_records": input_records, "model_name": model_name},
+                {
+                    "input_records": input_records,
+                    "model_name": model_name,
+                    "raw_stored": raw_payload is not None,
+                },
             )
         return job_id, capability
 
@@ -1417,7 +1503,7 @@ class Workspace:
         except (AttributeError, UnicodeEncodeError) as exc:
             raise NotFoundError("queued job not found") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, organization_id, created_by, model_name,
                           source_sha256, input_records, state_version
@@ -1476,7 +1562,7 @@ class Workspace:
         except (AttributeError, UnicodeEncodeError) as exc:
             raise NotFoundError("running job not found") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, status, input_records, processed_records,
                           cancel_requested_at, state_version
@@ -1548,7 +1634,7 @@ class Workspace:
         except (TypeError, ValueError, UnicodeEncodeError) as exc:
             raise ValueError("results and capability must be valid") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, organization_id, created_by, source_sha256,
                           input_records, result_retention_days, state_version
@@ -1617,7 +1703,7 @@ class Workspace:
             if failure_code == "cancelled"
             else JobStatus.FAILED.value
         )
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, organization_id, created_by, result_retention_days,
                           state_version FROM jobs
@@ -1650,7 +1736,7 @@ class Workspace:
                 ),
             )
             if cursor.rowcount != 1:
-                return False
+                raise ConflictError("job failure lost a concurrent transition")
             self._audit(
                 connection,
                 row["organization_id"],
@@ -1675,7 +1761,7 @@ class Workspace:
         principal = self.principal(token, now=now)
         self._require(principal, Role.ADMIN, Role.ANALYST)
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, created_by, status, result_retention_days, state_version
                    FROM jobs WHERE id = ? AND organization_id = ?
@@ -1709,7 +1795,9 @@ class Workspace:
                         row["state_version"],
                     ),
                 )
-                changed = cursor.rowcount == 1
+                if cursor.rowcount != 1:
+                    raise ConflictError("job cancellation lost a concurrent transition")
+                changed = True
             elif row["status"] == JobStatus.RUNNING.value:
                 target_status = JobStatus.CANCELLING.value
                 cursor = connection.execute(
@@ -1725,7 +1813,9 @@ class Workspace:
                         row["state_version"],
                     ),
                 )
-                changed = cursor.rowcount == 1
+                if cursor.rowcount != 1:
+                    raise ConflictError("job cancellation lost a concurrent transition")
+                changed = True
             if changed:
                 self._audit(
                     connection,
@@ -1788,7 +1878,7 @@ class Workspace:
 
         instant = now or _utc_now()
         recovered = 0
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             rows = connection.execute(
                 """SELECT id, organization_id, result_retention_days, state_version
                    FROM jobs WHERE status IN (?, ?, ?)""",
@@ -1837,8 +1927,11 @@ class Workspace:
         job_id: str,
         *,
         include_raw: bool = False,
+        export: bool = False,
         now: datetime | None = None,
     ) -> dict[str, Any]:
+        """Return one job; `export` marks a results download in the audit trail."""
+
         principal = self.principal(token, now=now)
         if include_raw:
             self._require(principal, Role.ADMIN)
@@ -1869,7 +1962,11 @@ class Workspace:
                 connection,
                 principal.organization_id,
                 principal.user_id,
-                "job.export" if results_included or raw_included else "job.view",
+                (
+                    "job.export"
+                    if raw_included or (export and results_included)
+                    else "job.view"
+                ),
                 "job",
                 job_id,
                 instant,

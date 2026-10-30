@@ -28,6 +28,8 @@ from log_classification_pipeline.taxonomy import (
     SUBSYSTEM_CANDIDATES,
 )
 
+FIXTURES = Path(__file__).resolve().parents[1] / "fixtures"
+
 
 class FakeZeroShotPipeline:
     def __init__(self, *, subsystem_score: float = 0.91, severity_score: float = 0.82):
@@ -89,8 +91,42 @@ class RulesPredictorTests(unittest.TestCase):
     def test_unknown_subsystem_abstains_without_echoing_input(self) -> None:
         prediction = RulesPredictor()([{"message": "synthetic heartbeat"}])[0]
         self.assertTrue(prediction["abstained"])
-        self.assertEqual(prediction["subsystem"], {"label": "compute", "score": 0.0})
+        self.assertEqual(prediction["subsystem"], {"label": "compute", "score": 0.5})
         self.assertNotIn("message", prediction)
+
+    def test_explicit_severity_survives_an_unknown_subsystem(self) -> None:
+        prediction = RulesPredictor()([{"message": "[error] mod_synthetic state 6"}])[0]
+        self.assertFalse(prediction["abstained"])
+        self.assertEqual(prediction["severity"]["label"], "error")
+
+    def test_realistic_log_formats(self) -> None:
+        cases = [
+            json.loads(line)
+            for line in (FIXTURES / "realistic-log-formats.jsonl").read_text(
+                encoding="utf-8"
+            ).splitlines()
+        ]
+        predictions = RulesPredictor()(cases)
+        for case, prediction in zip(cases, predictions):
+            with self.subTest(message=case["message"]):
+                self.assertEqual(
+                    prediction["subsystem"]["label"], case["expected_subsystem"]
+                )
+                self.assertEqual(
+                    prediction["severity"]["label"], case["expected_severity"]
+                )
+                self.assertFalse(prediction["abstained"])
+
+    def test_negated_problems_and_partial_words_do_not_alarm(self) -> None:
+        messages = (
+            "backup finished with 0 errors",
+            "service stopped without failures",
+            "failsafe mode is available for the service",
+        )
+        predictions = RulesPredictor()([{"message": item} for item in messages])
+        self.assertTrue(
+            all(item["severity"]["label"] in ("info", "routine") for item in predictions)
+        )
 
     def test_threshold_configuration_is_strict(self) -> None:
         for value in (True, "0.5", -0.1, 1.1):
@@ -120,7 +156,7 @@ class ModelCatalogTests(unittest.TestCase):
                 "custom-synthetic",
             ],
         )
-        self.assertEqual(catalog[0]["quality_status"], "wiring-baseline")
+        self.assertEqual(catalog[0]["quality_status"], "heuristic")
         self.assertTrue(catalog[0]["artifact_bundled"])
         self.assertIsNone(catalog[0]["artifact_verified"])
         self.assertEqual(catalog[1]["languages"], ["en", "it", "fr", "es"])

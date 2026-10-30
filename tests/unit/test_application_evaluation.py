@@ -40,7 +40,7 @@ class ApplicationTests(unittest.TestCase):
     def test_classify_message_uses_full_pipeline_without_returning_input(self) -> None:
         result = classify_message("Authentication failed", RulesPredictor())
         self.assertEqual(result["subsystem"]["label"], "auth")
-        self.assertEqual(result["severity"]["label"], "error")
+        self.assertEqual(result["severity"]["label"], "security_event")
         self.assertNotIn("message", result)
 
     def test_classify_message_rejects_blank_or_non_string_values(self) -> None:
@@ -208,6 +208,39 @@ class ApplicationTests(unittest.TestCase):
                 )
             self.assertEqual(predictor_calls, [])
 
+    @mock.patch("log_classification_pipeline.application.MAX_RAW_PAYLOAD_BYTES", 100)
+    def test_raw_retention_cap_is_enforced_before_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            input_path = root / "input.jsonl"
+            input_path.write_bytes(b'{"message":"synthetic"}\n' * 50)
+            workspace = Workspace(root / "workspace.sqlite3")
+            workspace.bootstrap(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            token, _ = workspace.login(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            predictor = mock.Mock()
+            with self.assertRaisesRegex(
+                BatchResourceLimitError,
+                "retained raw source byte count",
+            ):
+                classify_file_into_workspace(
+                    input_path,
+                    predictor,
+                    workspace,
+                    token,
+                    store_raw=True,
+                )
+
+            predictor.assert_not_called()
+            self.assertEqual(workspace.list_jobs(token), [])
+
     def test_workspace_raw_reread_remains_bounded_if_source_grows(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)
@@ -284,7 +317,7 @@ class EvaluationTests(unittest.TestCase):
         self.assertEqual(result["split"], "development")
         self.assertEqual(
             result["model"],
-            {"id": "synthetic-rules-baseline", "revision": "1"},
+            {"id": "log-format-rules", "revision": "2"},
         )
 
     def test_perfect_full_taxonomy_evaluation_reports_reproducible_metrics(self) -> None:

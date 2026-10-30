@@ -1,0 +1,22 @@
+{"message":"Oct 30 12:01:01 host1 sshd[2211]: Failed password for root from 203.0.113.5 port 52211 ssh2","expected_subsystem":"auth","expected_severity":"security_event"}
+{"message":"Oct 30 12:01:03 host1 sshd[2212]: Accepted publickey for sample from 198.51.100.7 port 40112 ssh2","expected_subsystem":"auth","expected_severity":"info"}
+{"message":"Oct 30 12:01:05 host1 sshd[2212]: pam_unix(sshd:session): session opened for user sample by (uid=0)","expected_subsystem":"auth","expected_severity":"routine"}
+{"message":"Oct 30 12:01:09 host1 sudo: sample : 3 incorrect password attempts ; TTY=pts/0 ; PWD=/home/sample ; USER=root ; COMMAND=/bin/bash","expected_subsystem":"auth","expected_severity":"security_event"}
+{"message":"Oct 30 12:02:11 host1 kernel: [12345.678] Out of memory: Killed process 4242 (java) total-vm:8123456kB","expected_subsystem":"compute","expected_severity":"error"}
+{"message":"Oct 30 12:03:00 host1 CRON[991]: (root) CMD (/usr/local/bin/sample.sh)","expected_subsystem":"compute","expected_severity":"routine"}
+{"message":"Oct 30 12:03:10 host1 kernel: [UFW BLOCK] IN=eth0 OUT= SRC=203.0.113.8 DST=198.51.100.2 PROTO=TCP DPT=23","expected_subsystem":"firewall","expected_severity":"routine"}
+{"message":"Oct 30 12:03:20 host1 smartd[801]: Device: /dev/sda [SAT], 8 Currently unreadable (pending) sectors","expected_subsystem":"storage","expected_severity":"routine"}
+{"message":"Oct 30 12:03:30 host1 kernel: EXT4-fs error (device sda1): ext4_find_entry:1455: inode #131073: comm sample: reading directory lblock 0","expected_subsystem":"storage","expected_severity":"error"}
+{"message":"Oct 30 12:03:40 host1 hostapd: wlan0: STA 02:00:00:00:00:01 IEEE 802.11: authenticated","expected_subsystem":"wifi-ap","expected_severity":"routine"}
+{"message":"Oct 30 12:03:50 host1 wg-quick[700]: [#] ip link set mtu 1420 up dev wg0","expected_subsystem":"vpn","expected_severity":"routine"}
+{"message":"Oct 30 12:04:01 host1 frigate[900]: camera front_door failed to start ffmpeg","expected_subsystem":"nvr-cctv","expected_severity":"error"}
+{"message":"203.0.113.9 - - [30/Oct/2026:12:04:00 +0000] \"GET /../../etc/passwd HTTP/1.1\" 404 153 \"-\" \"curl/8.0\"","expected_subsystem":"compute","expected_severity":"security_event"}
+{"message":"198.51.100.3 - - [30/Oct/2026:12:04:02 +0000] \"GET /index.html HTTP/1.1\" 200 5120 \"-\" \"Mozilla/5.0\"","expected_subsystem":"compute","expected_severity":"routine"}
+{"message":"198.51.100.3 - - [30/Oct/2026:12:04:03 +0000] \"POST /api/orders HTTP/1.1\" 502 157 \"-\" \"Mozilla/5.0\"","expected_subsystem":"compute","expected_severity":"error"}
+{"message":"2026-10-30T12:05:00Z ERROR db.pool connection timeout after 30000ms","expected_subsystem":"network","expected_severity":"error"}
+{"message":"2026-10-30T12:05:01Z WARN disk /var usage 91%","expected_subsystem":"storage","expected_severity":"warning"}
+{"message":"2026-10-30T12:05:02Z INFO service started on port 8080","expected_subsystem":"compute","expected_severity":"info"}
+{"message":"nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)","expected_subsystem":"compute","expected_severity":"error"}
+{"message":"Accesso negato per l'utente admin: password errata","expected_subsystem":"auth","expected_severity":"security_event"}
+{"message":"level=warn msg=\"retrying upstream request\" component=worker","expected_subsystem":"compute","expected_severity":"warning"}
+{"message":"Oct 30 12:06:00 host1 sshd-session[1094]: Connection closed by 198.51.100.7 port 61887","expected_subsystem":"auth","expected_severity":"routine"}

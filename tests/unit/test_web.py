@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import re
+import sqlite3
 import tempfile
 import threading
 import unittest
@@ -292,6 +293,100 @@ class WebApplicationTests(unittest.TestCase):
         self.assertEqual(selected.headers["content-language"], "fr")
         self.assertIn('<html lang="fr">', selected.text)
 
+    def test_locale_works_from_the_login_page_whatever_the_session_cookie(self) -> None:
+        self.ui_login()
+        for session in ("valid", "stale"):
+            with self.subTest(session=session):
+                if session == "stale":
+                    self.client.cookies.clear()
+                    self.client.cookies.set("lcp_session", "synthetic-stale-session")
+                self.client.get("/app/login")
+                csrf = self.client.cookies.get("lcp_login_csrf")
+                changed = self.client.post(
+                    "/app/locale",
+                    data={"locale": "fr", "target": "login"},
+                    headers={"Origin": "http://testserver", "X-CSRF-Token": csrf},
+                    follow_redirects=False,
+                )
+                self.assertEqual(changed.status_code, 303, changed.text)
+
+        # A session cookie does not excuse a wrong token.
+        denied = self.client.post(
+            "/app/locale",
+            data={"locale": "fr", "target": "login"},
+            headers={"Origin": "http://testserver", "X-CSRF-Token": "synthetic"},
+            follow_redirects=False,
+        )
+        self.assertEqual(denied.status_code, 401, denied.text)
+
+    def test_non_ascii_csrf_cookie_is_denied_without_an_internal_error(self) -> None:
+        response = self.client.post(
+            "/app/logout",
+            headers={
+                "Cookie": "lcp_login_csrf=caf\u00e9".encode("latin-1"),
+                "Origin": "http://testserver",
+                "X-CSRF-Token": "synthetic",
+            },
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 401, response.text)
+
+    def test_rate_limited_login_page_keeps_its_token_for_the_correct_password(self) -> None:
+        limiter = self.app.state.login_rate_limiter
+        limiter._account_limit = 2
+        self.client.get("/app/login")
+        csrf = self.client.cookies.get("lcp_login_csrf")
+
+        def submit(password: str):
+            return self.client.post(
+                "/app/login",
+                data={
+                    "organization": "sample-org",
+                    "username": "owner",
+                    "password": password,
+                    "csrf": csrf,
+                },
+                headers={"Origin": "http://testserver", "X-CSRF-Token": csrf},
+                follow_redirects=False,
+            )
+
+        wrong = "synthetic-wrong-password"
+        rejected = submit(wrong)
+        self.assertEqual(rejected.status_code, 401, rejected.text)
+        self.assertEqual(rejected.json()["code"], "invalid_credentials")
+        for _attempt in range(2):
+            limited = submit(wrong)
+            self.assertEqual(limited.status_code, 429, limited.text)
+            self.assertEqual(limited.json()["code"], "login_rate_limited")
+            self.assertGreaterEqual(int(limited.headers["retry-after"]), 1)
+            self.assertNotIn("set-cookie", limited.headers)
+        self.assertEqual(self.client.cookies.get("lcp_login_csrf"), csrf)
+
+        limiter._accounts.clear()
+        self.assertEqual(submit(PASSWORD).status_code, 303)
+
+    def test_login_outage_does_not_consume_the_rate_limit(self) -> None:
+        limiter = self.app.state.login_rate_limiter
+        credentials = {
+            "organization": "sample-org",
+            "username": "owner",
+            "password": PASSWORD,
+        }
+        with mock.patch.object(
+            self.app.state.workspace,
+            "login",
+            side_effect=sqlite3.OperationalError("synthetic outage"),
+        ):
+            for _attempt in range(limiter._account_limit + 1):
+                outage = self.client.post("/api/v1/sessions", json=credentials)
+                self.assertEqual(outage.status_code, 503, outage.text)
+        self.assertEqual(limiter._accounts, {})
+        self.assertEqual(limiter._sources, {})
+        self.assertEqual(
+            self.client.post("/api/v1/sessions", json=credentials).status_code,
+            201,
+        )
+
     def test_api_bearer_authentication_and_ambiguous_cookie_are_rejected(self) -> None:
         missing = self.client.get("/api/v1/jobs")
         self.assertEqual(missing.status_code, 401)
@@ -407,7 +502,7 @@ class WebApplicationTests(unittest.TestCase):
         page = self.client.get("/app", headers={"Accept-Language": "it"})
         self.assertEqual(page.status_code, 200, page.text)
         self.assertIn(
-            '<option value="rules">Baseline a regole — scelta sicura</option>',
+            '<option value="rules">Regole per formati di log — scelta sicura</option>',
             page.text,
         )
         self.assertIn("non carica artefatti", page.text)
@@ -740,6 +835,25 @@ class WebApplicationTests(unittest.TestCase):
                 1,
             )
 
+    def test_full_queue_rejects_before_parsing_the_input(self) -> None:
+        token = self.api_login("analyst", "analyst-password-value")
+        queue = self.app.state.job_queue
+        queue._admitted = queue.max_admitted_jobs
+        try:
+            with mock.patch(
+                "log_classification_pipeline.web.app.read_input_file",
+            ) as parser:
+                response = self.client.post(
+                    "/api/v1/classifications",
+                    headers=self.bearer(token),
+                    json={"records": [{"message": "disk failed"}]},
+                )
+        finally:
+            queue._admitted = 0
+        self.assertEqual(response.status_code, 503, response.text)
+        self.assertEqual(response.json()["code"], "queue_full")
+        parser.assert_not_called()
+
     def test_file_upload_is_bounded_and_ignores_hostile_filename(self) -> None:
         token = self.api_login("analyst", "analyst-password-value")
         accepted = self.client.post(
@@ -923,6 +1037,85 @@ class WebApplicationTests(unittest.TestCase):
         )
         self.assertEqual(unavailable.status_code, 409)
         self.assertEqual(unavailable.json()["code"], "conflict")
+        self.assertEqual(
+            unavailable.json()["detail"],
+            "Results are not available for this job.",
+        )
+
+    def test_raw_download_is_admin_only_audited_and_explicit_when_absent(self) -> None:
+        token = self.api_login("owner", PASSWORD)
+        payload = b'{"message":"synthetic raw"}\n'
+        job_id = self.workspace.store_completed_job(
+            token,
+            hashlib.sha256(payload).hexdigest(),
+            1,
+            [RulesPredictor()([{"message": "Backup completed"}])[0]],
+            raw_payload=payload,
+        )
+
+        for username, password in (
+            ("analyst", "analyst-password-value"),
+            ("reviewer", "viewer-password-value"),
+        ):
+            with self.subTest(username=username):
+                denied = self.client.get(
+                    f"/api/v1/jobs/{job_id}/raw",
+                    headers=self.bearer(self.api_login(username, password)),
+                )
+                self.assertEqual(denied.status_code, 403, denied.text)
+
+        downloaded = self.client.get(
+            f"/api/v1/jobs/{job_id}/raw",
+            headers=self.bearer(token),
+        )
+        self.assertEqual(downloaded.status_code, 200, downloaded.text)
+        self.assertEqual(downloaded.content, payload)
+        self.assertEqual(
+            downloaded.headers["content-type"],
+            "application/octet-stream",
+        )
+        self.assertIn("attachment", downloaded.headers["content-disposition"])
+        latest = self.workspace.list_audit_events(token, limit=1)[0]
+        self.assertEqual(latest["action"], "job.export")
+        self.assertEqual(latest["target_id"], job_id)
+        self.assertIs(latest["details"]["raw_included"], True)
+        self.assertNotIn("synthetic raw", repr(latest))
+
+        without_raw = self.workspace.store_completed_job(
+            token,
+            "e" * 64,
+            1,
+            [RulesPredictor()([{"message": "Backup completed"}])[0]],
+        )
+        absent = self.client.get(
+            f"/api/v1/jobs/{without_raw}/raw",
+            headers=self.bearer(token),
+        )
+        self.assertEqual(absent.status_code, 409, absent.text)
+        self.assertEqual(
+            absent.json()["detail"],
+            "Raw source bytes are not available for this job.",
+        )
+
+    def test_job_page_is_audited_as_a_view_and_export_as_an_export(self) -> None:
+        token = self.api_login("owner", PASSWORD)
+        job_id = self.workspace.store_completed_job(
+            token,
+            "d" * 64,
+            1,
+            [RulesPredictor()([{"message": "Backup completed"}])[0]],
+        )
+        self.ui_login()
+
+        def latest_action() -> str:
+            return self.workspace.list_audit_events(token, limit=1)[0]["action"]
+
+        page = self.client.get(f"/app/jobs/{job_id}")
+        self.assertEqual(page.status_code, 200, page.text)
+        self.assertEqual(latest_action(), "job.view")
+        export = self.client.get(f"/app/jobs/{job_id}/export")
+        self.assertEqual(export.status_code, 200, export.text)
+        self.assertEqual(latest_action(), "job.export")
 
     def test_ui_cookie_login_origin_csrf_and_classification_flow(self) -> None:
         page = self.client.get("/app/login")
@@ -1158,12 +1351,38 @@ class WebApplicationTests(unittest.TestCase):
         items = Workspace(self.database).list_users(token)
         return {item["username"]: item for item in items}
 
+    def test_kept_source_shows_escaped_messages_to_admins_only(self) -> None:
+        token = self.api_login("owner", PASSWORD)
+        message = "2026-10-30T12:00:00Z ERROR <b>service</b> crashed"
+        accepted = self.client.post(
+            "/api/v1/classifications/file",
+            headers=self.bearer(token),
+            data={"keep_source": "true"},
+            files={"upload": ("sample.log", f"{message}\n".encode(), "text/plain")},
+        )
+        self.assertEqual(accepted.status_code, 202, accepted.text)
+        job_url = f"/app/jobs/{accepted.json()['job_id']}"
+        self.wait_for_job(accepted.json()["job_id"], token)
+        viewer = self.client.post(
+            "/api/v1/classifications/file",
+            headers=self.bearer(self.api_login("analyst", "analyst-password-value")),
+            data={"keep_source": "true"},
+            files={"upload": ("sample.log", b"service started\n", "text/plain")},
+        )
+        self.assertEqual(viewer.status_code, 403)
+
+        self.ui_login()
+        page = self.client.get(job_url)
+        self.assertIn("&lt;b&gt;service&lt;/b&gt; crashed", page.text)
+        self.assertNotIn("<b>service</b>", page.text)
+
     def test_ui_respects_its_content_security_policy(self) -> None:
         page = self.client.get("/app/login")
         self.assertNotRegex(page.text, r"<[^>]+\son[a-z]+=")
         self.assertIn("data-auto-submit", page.text)
         self.assertEqual(self.client.get("/api/v1/docs").status_code, 404)
         self.assertEqual(self.client.get("/api/v1/openapi.json").status_code, 200)
+        self.assertEqual(self.client.get("/favicon.ico").status_code, 204)
 
     def test_admin_user_retention_and_request_limit(self) -> None:
         token = self.api_login("owner", PASSWORD)
@@ -1238,6 +1457,76 @@ class WebApplicationTests(unittest.TestCase):
         )
         start = next(message for message in sent if message["type"] == "http.response.start")
         self.assertEqual(start["status"], 413)
+
+    def test_chunked_oversized_bodies_report_the_documented_413(self) -> None:
+        token = self.api_login("analyst", "analyst-password-value")
+        boundary = b"synthetic-boundary"
+
+        def post_chunked(path: bytes, content_type: bytes, first: bytes):
+            chunks = iter((first, *(b"a" * 1_000 for _ in range(10))))
+            sent = []
+
+            async def receive():
+                return {
+                    "type": "http.request",
+                    "body": next(chunks),
+                    "more_body": True,
+                }
+
+            async def send(message):
+                sent.append(message)
+
+            asyncio.run(
+                self.app(
+                    {
+                        "type": "http",
+                        "asgi": {"version": "3.0"},
+                        "http_version": "1.1",
+                        "method": "POST",
+                        "scheme": "http",
+                        "path": path.decode("ascii"),
+                        "raw_path": path,
+                        "query_string": b"",
+                        "server": ("testserver", 80),
+                        "client": ("198.51.100.1", 50000),
+                        "headers": [
+                            (b"host", b"testserver"),
+                            (b"authorization", f"Bearer {token}".encode("ascii")),
+                            (b"content-type", content_type),
+                        ],
+                    },
+                    receive,
+                    send,
+                )
+            )
+            start = next(
+                message for message in sent if message["type"] == "http.response.start"
+            )
+            body = b"".join(
+                message.get("body", b"")
+                for message in sent
+                if message["type"] == "http.response.body"
+            )
+            return start["status"], json.loads(body)
+
+        for path, content_type, first in (
+            (
+                b"/api/v1/classifications",
+                b"application/json",
+                b'{"records":"',
+            ),
+            (
+                b"/api/v1/classifications/file",
+                b"multipart/form-data; boundary=" + boundary,
+                b"--" + boundary + b"\r\n"
+                b'Content-Disposition: form-data; name="upload"; '
+                b'filename="input.txt"\r\n\r\n',
+            ),
+        ):
+            with self.subTest(path=path):
+                status, problem = post_chunked(path, content_type, first)
+                self.assertEqual(status, 413)
+                self.assertEqual(problem["code"], "request_too_large")
 
     def test_secure_cookie_profile_enables_secure_and_hsts(self) -> None:
         self.app.state.job_queue.close()
@@ -1376,6 +1665,43 @@ class LoginRateLimiterTests(unittest.TestCase):
         self.assertIsNone(
             limiter.retry_after("client-a", "sample-org", "different-user")
         )
+
+    def test_concurrent_reservations_cannot_exceed_the_limit(self) -> None:
+        limiter = LoginRateLimiter(
+            account_limit=5,
+            source_limit=20,
+            window_seconds=60,
+        )
+        barrier = threading.Barrier(32)
+        allowed: list[bool] = []
+
+        def attempt() -> None:
+            barrier.wait(5.0)
+            allowed.append(
+                limiter.reserve("198.51.100.1", "sample-org", "owner") is None
+            )
+
+        threads = [threading.Thread(target=attempt) for _ in range(32)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(5.0)
+        self.assertEqual(len(allowed), 32)
+        self.assertEqual(sum(allowed), 5)
+
+    def test_release_returns_a_reservation_to_both_buckets(self) -> None:
+        limiter = LoginRateLimiter(
+            account_limit=1,
+            source_limit=1,
+            window_seconds=60,
+        )
+        identity = ("198.51.100.1", "sample-org", "owner")
+        self.assertIsNone(limiter.reserve(*identity))
+        self.assertIsNotNone(limiter.reserve(*identity))
+        limiter.release(*identity)
+        self.assertIsNone(limiter.retry_after(*identity))
+        self.assertEqual(limiter._accounts, {})
+        self.assertEqual(limiter._sources, {})
 
     def test_configuration_rejects_invalid_limits(self) -> None:
         with self.assertRaisesRegex(ValueError, "source_limit"):

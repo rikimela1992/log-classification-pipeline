@@ -13,6 +13,10 @@ chown log-classify:log-classify /var/lib/log-classification-pipeline
 chmod 700 /var/lib/log-classification-pipeline
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
+    # Only an upgrade names a previous version; try-restart never starts or enables.
+    if [ "${1:-}" = "configure" ] && [ -n "${2:-}" ]; then
+        systemctl try-restart log-classification-pipeline.service >/dev/null 2>&1 || true
+    fi
 fi
 
 exit 0

@@ -27,7 +27,7 @@ def _rules_metadata() -> dict[str, Any]:
         "model_id": RulesPredictor.model_id,
         "model_revision": RulesPredictor.revision,
         "profile_revision": None,
-        "quality_status": "wiring-baseline",
+        "quality_status": "heuristic",
     }
 
 

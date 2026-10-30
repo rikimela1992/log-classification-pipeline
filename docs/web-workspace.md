@@ -27,6 +27,11 @@ Open `http://127.0.0.1:8080/app`. The command binds only to `127.0.0.1`, disable
 proxy-header trust and access logging, and refuses an unknown or unsafe
 workspace database. Stop it with `Ctrl-C`.
 
+An administrator can tick **keep the file** on upload (API: `keep_source=true`).
+The source then stays in the unencrypted database until raw retention expires, and
+the job page shows the original message next to each finding. Without it, or for
+other roles, the page shows record numbers only.
+
 The default application limit is 25 MiB and 25,000 records per file. The queue
 admits at most eight jobs and 50 MiB of raw bytes in aggregate, including the
 running job, and reports progress every 16 records. These values are explicit
@@ -55,7 +60,7 @@ username, or client-address strings. It is bounded and shared by the API and
 browser login paths, but resets at process restart and is not a distributed
 rate limit.
 
-The rules baseline is available without model dependencies. To expose the
+The format rules are available without model dependencies. To expose the
 known profiles in the selector, install both extras and enable them. Predictors
 remain lazy and downloads remain disabled by default:
 
@@ -98,12 +103,14 @@ registered catalog without loading an artifact.
 | Create users and change retention | yes | no | no |
 | Read the audit trail | yes | no | no |
 
-The web surface never requests durable raw-source retention and never exports
-source messages. After complete validation, bounded source bytes wait only in
-the process-local in-memory queue. The worker uses a private `0600` temporary
-file and removes it after execution. Raw bytes and bearer tokens are never
-stored in SQLite; a job stores only the source digest, counts, model name,
-state, timestamps, sanitized failure code, and an internal capability hash.
+The web surface never requests durable raw-source retention, and its result
+exports never contain source messages. The only exception is an administrator
+downloading bytes that the CLI retained with `--store-raw`, which is audited.
+After complete validation, bounded source bytes wait only in the process-local
+in-memory queue. The worker uses a private `0600` temporary file and removes it
+after execution. Web jobs store no raw bytes or bearer tokens in SQLite, only
+the source digest, counts, model name, state, timestamps, sanitized failure
+code, and an internal capability hash.
 RAM is not an erasure boundary: the source can still be visible to the owning
 OS account, swap, a core dump, or malicious code in the process.
 
@@ -135,7 +142,8 @@ available only after terminal success.
 | `GET /api/v1/jobs/{id}` | Read one organization-scoped job |
 | `GET /api/v1/jobs/{id}/status` | Poll progress without adding audit events |
 | `POST /api/v1/jobs/{id}/cancel` | Cancel queued work or request a chunk-boundary cancellation |
-| `GET /api/v1/jobs/{id}/export` | Export available results as NDJSON |
+| `GET /api/v1/jobs/{id}/export` | Export available results as NDJSON (audited as `job.export`) |
+| `GET /api/v1/jobs/{id}/raw` | Admin-only download of source bytes retained by the CLI (audited as `job.export`; `409` when absent or expired) |
 | `/api/v1/admin/*` | Admin-only users, retention, purge, and audit operations |
 | `PATCH /api/v1/admin/users/{id}` | Change role, disabled state, or password and revoke that user's sessions |
 

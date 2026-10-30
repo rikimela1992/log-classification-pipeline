@@ -15,3 +15,6 @@ Run the deliberately invalid example:
 The invalid file contains one blank required field and one malformed JSON line.
 Validation is expected to fail with a non-zero exit status before any predictor
 could be called.
+
+`sample-server.log` is an invented server log mixing syslog, web access, and
+application lines. Use it to try `classify` and `report`.

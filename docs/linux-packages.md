@@ -18,7 +18,7 @@ headless environment. This remains an alpha, localhost-only application and is
 not production-ready.
 
 Each candidate contains the Python runtime, CLI, authenticated browser
-workspace, static assets, and the deterministic rules baseline. No model,
+workspace, static assets, and the deterministic format rules. No model,
 tokenizer, dataset, Transformers runtime, PyTorch runtime, or model cache is
 bundled. Model-enabled packages require a separate future size, license, and
 platform review.
