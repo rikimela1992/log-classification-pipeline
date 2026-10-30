@@ -14,10 +14,12 @@ import os
 import re
 import secrets
 import sqlite3
+import threading
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from enum import StrEnum
+from functools import lru_cache
 from pathlib import Path
 from stat import S_ISREG
 from typing import Any, Iterator
@@ -103,13 +105,19 @@ class PurgeSummary:
 _IDENTIFIER_PATTERN = re.compile(r"[a-z0-9][a-z0-9._-]{2,63}\Z")
 _PASSWORD_MIN_LENGTH = 12
 _PASSWORD_MAX_LENGTH = 1024
-_SCRYPT_N = 2**14
+_SCRYPT_DEFAULT_N = 2**17
+# Internal override point: the test package lowers this to stay fast.
+_SCRYPT_N = _SCRYPT_DEFAULT_N
 _SCRYPT_R = 8
 _SCRYPT_P = 1
+# Stored parameters above this ceiling are refused rather than allocated.
+_SCRYPT_MAX_MEMORY_BYTES = 256 * 1024 * 1024
+# Each derivation holds 128 MiB; bound what concurrent logins can pin.
+_SCRYPT_SLOTS = threading.BoundedSemaphore(4)
 _SESSION_BYTES = 32
 _DEFAULT_SESSION_HOURS = 8
 _MAX_SESSION_HOURS = 24
-_MAX_RAW_PAYLOAD_BYTES = 1_000_000
+MAX_RAW_PAYLOAD_BYTES = 1_000_000
 _SCHEMA_VERSION = "2"
 _SCHEMA_VERSION_V1 = "1"
 _EXPECTED_TABLES_V1 = {
@@ -166,69 +174,101 @@ def _validate_password(password: str) -> None:
         )
 
 
+def _scrypt_memory_bytes(n: int, r: int, p: int) -> int:
+    return 128 * r * (n + p + 2)
+
+
+def _scrypt(
+    secret: bytes,
+    salt: bytes,
+    n: int,
+    r: int,
+    p: int,
+    *,
+    dklen: int = 64,
+) -> bytes:
+    with _SCRYPT_SLOTS:
+        return hashlib.scrypt(
+            secret,
+            salt=salt,
+            n=n,
+            r=r,
+            p=p,
+            dklen=dklen,
+            maxmem=_scrypt_memory_bytes(n, r, p),
+        )
+
+
+def _encode_password_hash(n: int, r: int, p: int, salt: bytes, derived: bytes) -> str:
+    return "$".join(("scrypt", str(n), str(r), str(p), salt.hex(), derived.hex()))
+
+
 def _password_hash(password: str) -> str:
     _validate_password(password)
+    return _derive_password_hash(password)
+
+
+def _derive_password_hash(password: str) -> str:
     salt = secrets.token_bytes(16)
-    derived = hashlib.scrypt(
+    derived = _scrypt(
         password.encode("utf-8"),
-        salt=salt,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
+        salt,
+        _SCRYPT_N,
+        _SCRYPT_R,
+        _SCRYPT_P,
     )
-    return "$".join(
-        (
-            "scrypt",
-            str(_SCRYPT_N),
-            str(_SCRYPT_R),
-            str(_SCRYPT_P),
-            salt.hex(),
-            derived.hex(),
-        )
-    )
+    return _encode_password_hash(_SCRYPT_N, _SCRYPT_R, _SCRYPT_P, salt, derived)
 
 
 def _password_matches(password: str, encoded: str) -> bool:
+    """Verify with the parameters stored in the hash, within fixed bounds."""
+
     try:
         algorithm, raw_n, raw_r, raw_p, raw_salt, raw_derived = encoded.split("$")
         if algorithm != "scrypt":
             return False
+        n, r, p = int(raw_n), int(raw_r), int(raw_p)
+        if (
+            min(n, r, p) < 1
+            or _scrypt_memory_bytes(n, r, p) > _SCRYPT_MAX_MEMORY_BYTES
+        ):
+            return False
         expected = bytes.fromhex(raw_derived)
-        observed = hashlib.scrypt(
+        observed = _scrypt(
             password.encode("utf-8"),
-            salt=bytes.fromhex(raw_salt),
-            n=int(raw_n),
-            r=int(raw_r),
-            p=int(raw_p),
+            bytes.fromhex(raw_salt),
+            n,
+            r,
+            p,
             dklen=len(expected),
         )
-    except (TypeError, ValueError):
+    except (OverflowError, TypeError, ValueError):
         return False
     return hmac.compare_digest(observed, expected)
 
 
-def _dummy_password_hash() -> str:
+def _password_needs_rehash(encoded: str) -> bool:
+    """Report a verified hash whose stored cost is below the current one."""
+
+    _algorithm, raw_n, raw_r, raw_p, _salt, _derived = encoded.split("$")
+    return (
+        int(raw_n) < _SCRYPT_N
+        or int(raw_r) < _SCRYPT_R
+        or int(raw_p) < _SCRYPT_P
+    )
+
+
+@lru_cache(maxsize=4)
+def _dummy_password_hash(n: int, r: int, p: int) -> str:
+    # Derived on first use so that commands that never log in do not pay for it.
     salt = b"local-auth-dummy"
-    derived = hashlib.scrypt(
-        b"dummy-password-value",
-        salt=salt,
-        n=_SCRYPT_N,
-        r=_SCRYPT_R,
-        p=_SCRYPT_P,
+    return _encode_password_hash(
+        n,
+        r,
+        p,
+        salt,
+        _scrypt(b"dummy-password-value", salt, n, r, p),
     )
-    return "$".join(
-        (
-            "scrypt",
-            str(_SCRYPT_N),
-            str(_SCRYPT_R),
-            str(_SCRYPT_P),
-            salt.hex(),
-            derived.hex(),
-        )
-    )
-
-
-_DUMMY_PASSWORD_HASH = _dummy_password_hash()
 
 
 def _token_hash(token: str) -> str:
@@ -248,8 +288,8 @@ def _validate_source(source_sha256: str, raw_payload: bytes | None) -> None:
         raise ValueError("source_sha256 must be 64 lowercase hexadecimal characters")
     if raw_payload is not None and not isinstance(raw_payload, bytes):
         raise TypeError("raw_payload must be bytes or None")
-    if raw_payload is not None and len(raw_payload) > _MAX_RAW_PAYLOAD_BYTES:
-        raise ValueError(f"raw_payload must not exceed {_MAX_RAW_PAYLOAD_BYTES} bytes")
+    if raw_payload is not None and len(raw_payload) > MAX_RAW_PAYLOAD_BYTES:
+        raise ValueError(f"raw_payload must not exceed {MAX_RAW_PAYLOAD_BYTES} bytes")
     if raw_payload is not None and not hmac.compare_digest(
         hashlib.sha256(raw_payload).hexdigest(), source_sha256
     ):
@@ -762,7 +802,9 @@ class Workspace:
             )
             password_is_valid = _password_matches(
                 password if password_input_valid else "invalid-password-input",
-                row["password_hash"] if row is not None else _DUMMY_PASSWORD_HASH,
+                row["password_hash"]
+                if row is not None
+                else _dummy_password_hash(_SCRYPT_N, _SCRYPT_R, _SCRYPT_P),
             )
             if (
                 row is None
@@ -786,6 +828,20 @@ class Workspace:
                     )
                 authentication_failed = True
             else:
+                rehashed = _password_needs_rehash(row["password_hash"])
+                if rehashed:
+                    # Compare-and-swap: a concurrent password reset must win.
+                    cursor = connection.execute(
+                        "UPDATE users SET password_hash = ? "
+                        "WHERE id = ? AND password_hash = ?",
+                        (
+                            _derive_password_hash(password),
+                            row["id"],
+                            row["password_hash"],
+                        ),
+                    )
+                    if cursor.rowcount != 1:
+                        raise AuthenticationError("invalid credentials")
                 token = secrets.token_urlsafe(_SESSION_BYTES)
                 connection.execute(
                     """INSERT INTO sessions
@@ -806,6 +862,7 @@ class Workspace:
                     "session",
                     None,
                     instant,
+                    {"password_rehashed": True} if rehashed else None,
                 )
                 principal = Principal(
                     user_id=row["id"],
@@ -829,6 +886,7 @@ class Workspace:
             digest = _token_hash(token)
         except UnicodeEncodeError as exc:
             raise AuthenticationError("invalid session") from exc
+        principal: Principal | None = None
         with self._connect() as connection:
             row = connection.execute(
                 """SELECT sessions.expires_at, users.id, users.organization_id,
@@ -843,13 +901,17 @@ class Workspace:
                     connection.execute(
                         "DELETE FROM sessions WHERE token_hash = ?", (digest,)
                     )
-                raise AuthenticationError("invalid or expired session")
-            return Principal(
-                user_id=row["id"],
-                organization_id=row["organization_id"],
-                username=row["username"],
-                role=Role(row["role"]),
-            )
+            else:
+                principal = Principal(
+                    user_id=row["id"],
+                    organization_id=row["organization_id"],
+                    username=row["username"],
+                    role=Role(row["role"]),
+                )
+        # Raised only now: inside the block it would roll the DELETE back.
+        if principal is None:
+            raise AuthenticationError("invalid or expired session")
+        return principal
 
     def logout(self, token: str, *, now: datetime | None = None) -> None:
         principal = self.principal(token, now=now)
@@ -1850,8 +1912,11 @@ class Workspace:
         job_id: str,
         *,
         include_raw: bool = False,
+        export: bool = False,
         now: datetime | None = None,
     ) -> dict[str, Any]:
+        """Return one job; `export` marks a results download in the audit trail."""
+
         principal = self.principal(token, now=now)
         if include_raw:
             self._require(principal, Role.ADMIN)
@@ -1882,7 +1947,11 @@ class Workspace:
                 connection,
                 principal.organization_id,
                 principal.user_id,
-                "job.export" if results_included or raw_included else "job.view",
+                (
+                    "job.export"
+                    if raw_included or (export and results_included)
+                    else "job.view"
+                ),
                 "job",
                 job_id,
                 instant,

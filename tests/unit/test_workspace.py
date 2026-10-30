@@ -11,7 +11,9 @@ import unittest
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from unittest import mock
 
+from log_classification_pipeline import workspace as workspace_module
 from log_classification_pipeline.contracts import PredictionContractError
 from log_classification_pipeline.workspace import (
     AuthenticationError,
@@ -778,6 +780,117 @@ class WorkspaceTestCase(unittest.TestCase):
             ).fetchall()
         self.assertEqual(tables, [("unrelated",)])
         self.assertEqual(unrelated.read_bytes(), bytes_before)
+
+    def session_rows(self) -> int:
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            return connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
+
+    def test_expired_session_row_is_really_deleted(self) -> None:
+        self.assertEqual(self.session_rows(), 1)
+        with self.assertRaises(AuthenticationError):
+            self.workspace.principal(self.admin_token, now=NOW + timedelta(days=2))
+        self.assertEqual(self.session_rows(), 0)
+
+    def stored_password_hash(self) -> str:
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            return connection.execute(
+                "SELECT password_hash FROM users WHERE username = 'owner'"
+            ).fetchone()[0]
+
+    def store_password_hash(self, encoded: str) -> None:
+        with closing(sqlite3.connect(self.database_path)) as connection, connection:
+            connection.execute(
+                "UPDATE users SET password_hash = ? WHERE username = 'owner'",
+                (encoded,),
+            )
+
+    def legacy_password_hash(self, password: str) -> str:
+        salt = b"synthetic-salt16"
+        derived = hashlib.scrypt(password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1)
+        return f"scrypt${2**14}$8$1${salt.hex()}${derived.hex()}"
+
+    def test_login_upgrades_a_legacy_hash_at_the_production_cost(self) -> None:
+        self.assertEqual(workspace_module._SCRYPT_DEFAULT_N, 2**17)
+        legacy = self.legacy_password_hash(PASSWORD)
+        self.store_password_hash(legacy)
+        with mock.patch.object(
+            workspace_module,
+            "_SCRYPT_N",
+            workspace_module._SCRYPT_DEFAULT_N,
+        ):
+            with self.assertRaises(AuthenticationError):
+                self.workspace.login("sample-org", "owner", "synthetic-wrong-password")
+            self.assertEqual(self.stored_password_hash(), legacy)
+
+            self.workspace.login("sample-org", "owner", PASSWORD)
+            upgraded = self.stored_password_hash()
+            self.assertTrue(upgraded.startswith(f"scrypt${2**17}$8$1$"))
+            self.workspace.login("sample-org", "owner", PASSWORD)
+            self.assertEqual(self.stored_password_hash(), upgraded)
+        events = self.workspace.list_audit_events(self.admin_token, now=NOW, limit=2)
+        self.assertEqual(
+            [event["details"].get("password_rehashed") for event in events],
+            [None, True],
+        )
+
+    def test_login_rehash_preserves_short_legacy_passwords(self) -> None:
+        self.store_password_hash(self.legacy_password_hash("short-pass"))
+        with mock.patch.object(workspace_module, "_SCRYPT_N", 2**15):
+            self.workspace.login("sample-org", "owner", "short-pass")
+        self.assertTrue(self.stored_password_hash().startswith(f"scrypt${2**15}$"))
+
+    def test_login_rehash_cannot_overwrite_a_concurrent_password_reset(self) -> None:
+        self.store_password_hash(self.legacy_password_hash(PASSWORD))
+        reset = "scrypt$1024$8$1$00$00"
+
+        def reset_during_derivation(password: str) -> str:
+            self.store_password_hash(reset)
+            return "scrypt$2$1$1$00$00"
+
+        with (
+            mock.patch.object(workspace_module, "_SCRYPT_N", 2**15),
+            mock.patch.object(
+                workspace_module,
+                "_derive_password_hash",
+                side_effect=reset_during_derivation,
+            ),
+            self.assertRaises(AuthenticationError),
+        ):
+            self.workspace.login("sample-org", "owner", PASSWORD)
+        self.assertEqual(self.stored_password_hash(), reset)
+
+    def test_stored_scrypt_parameters_are_bounded(self) -> None:
+        for encoded in (
+            "scrypt$1073741824$8$1$00$00",
+            f"scrypt${10**400}$8$1$00$00",
+            "scrypt$0$8$1$00$00",
+            "scrypt$1024$-8$1$00$00",
+            "scrypt$1000$8$1$00$00",
+            "scrypt$1024$8$1$00$",
+        ):
+            with self.subTest(encoded=encoded[:24]):
+                self.assertFalse(workspace_module._password_matches(PASSWORD, encoded))
+
+    def test_plain_read_is_a_view_and_only_export_is_an_export(self) -> None:
+        job_id = self.workspace.store_completed_job(
+            self.admin_token,
+            digest(b"payload"),
+            1,
+            [prediction()],
+            now=NOW,
+        )
+
+        def latest_event() -> dict[str, object]:
+            return self.workspace.list_audit_events(
+                self.admin_token,
+                limit=1,
+                now=NOW,
+            )[0]
+
+        self.workspace.get_job(self.admin_token, job_id, now=NOW)
+        self.assertEqual(latest_event()["action"], "job.view")
+        self.workspace.get_job(self.admin_token, job_id, export=True, now=NOW)
+        self.assertEqual(latest_event()["action"], "job.export")
 
     def running_job(self) -> tuple[str, str]:
         job_id, capability = self.workspace.enqueue_classification_job(

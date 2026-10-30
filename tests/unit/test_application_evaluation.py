@@ -208,6 +208,38 @@ class ApplicationTests(unittest.TestCase):
                 )
             self.assertEqual(predictor_calls, [])
 
+    def test_raw_retention_cap_is_enforced_before_classification(self) -> None:
+        with tempfile.TemporaryDirectory() as raw_directory:
+            root = Path(raw_directory)
+            input_path = root / "input.jsonl"
+            input_path.write_bytes(b'{"message":"synthetic"}\n' * 50_000)
+            workspace = Workspace(root / "workspace.sqlite3")
+            workspace.bootstrap(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            token, _ = workspace.login(
+                "sample-org",
+                "owner",
+                "correct-horse-battery-staple",
+            )
+            predictor = mock.Mock()
+            with self.assertRaisesRegex(
+                BatchResourceLimitError,
+                "retained raw source byte count",
+            ):
+                classify_file_into_workspace(
+                    input_path,
+                    predictor,
+                    workspace,
+                    token,
+                    store_raw=True,
+                )
+
+            predictor.assert_not_called()
+            self.assertEqual(workspace.list_jobs(token), [])
+
     def test_workspace_raw_reread_remains_bounded_if_source_grows(self) -> None:
         with tempfile.TemporaryDirectory() as raw_directory:
             root = Path(raw_directory)

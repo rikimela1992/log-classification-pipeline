@@ -199,13 +199,25 @@ class LocalClassificationQueue:
                 raise
         return job_id
 
+    def _require_capacity(self, payload_bytes: int) -> None:
+        if (
+            self._admitted >= self.max_admitted_jobs
+            or self._admitted_bytes + payload_bytes > self.max_admitted_bytes
+        ):
+            raise QueueCapacityError("classification queue is full")
+
+    def ensure_capacity(self, payload_bytes: int) -> None:
+        """Refuse early when a job of this size would not fit right now.
+
+        This reserves nothing: `submit` still decides atomically.
+        """
+
+        with self._admission_lock:
+            self._require_capacity(payload_bytes)
+
     def _reserve_admission(self, payload_bytes: int) -> None:
         with self._admission_lock:
-            if (
-                self._admitted >= self.max_admitted_jobs
-                or self._admitted_bytes + payload_bytes > self.max_admitted_bytes
-            ):
-                raise QueueCapacityError("classification queue is full")
+            self._require_capacity(payload_bytes)
             self._admitted += 1
             self._admitted_bytes += payload_bytes
             self._idle.clear()

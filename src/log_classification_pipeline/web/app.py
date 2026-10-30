@@ -18,7 +18,12 @@ from uuid import uuid4
 
 from fastapi import FastAPI, File, Form, HTTPException, Request, Security, UploadFile
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
+from fastapi.responses import (
+    JSONResponse,
+    RedirectResponse,
+    Response,
+    StreamingResponse,
+)
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -48,6 +53,7 @@ from ..workspace import (
     AuthorizationError,
     ConflictError,
     NotFoundError,
+    Principal,
     RetentionPolicy,
     Role,
     Workspace,
@@ -151,8 +157,11 @@ class RetentionRequest(BaseModel):
     audit_days: int = Field(ge=1, le=3650)
 
 
-class _RequestTooLarge(Exception):
-    pass
+class _RequestTooLarge(HTTPException):
+    """Raised from `receive`; only an HTTPException keeps its status through FastAPI."""
+
+    def __init__(self) -> None:
+        super().__init__(status_code=413)
 
 
 def _headers(scope: Scope) -> dict[bytes, bytes]:
@@ -261,7 +270,7 @@ class RequestSizeLimitMiddleware:
             if message["type"] == "http.request":
                 observed += len(message.get("body", b""))
                 if observed > self.max_bytes:
-                    raise _RequestTooLarge
+                    raise _RequestTooLarge()
             return message
 
         async def tracked_send(message: Message) -> None:
@@ -325,20 +334,23 @@ class AuthenticationPreflightMiddleware:
                     scope, receive, send
                 )
                 return
+            cookie_csrf = _cookie_value(scope, _LOGIN_CSRF_COOKIE)
+            submitted = headers.get(_CSRF_HEADER, b"").decode("ascii", errors="ignore")
+            login_csrf_valid = (
+                cookie_csrf is not None
+                and bool(submitted)
+                and secrets.compare_digest(cookie_csrf.encode(), submitted.encode())
+            )
+            # The login page offers the locale form whatever session cookie the
+            # browser still holds, so its token is enough to change the locale.
             if path == "/app/login" or (
                 path == "/app/locale"
-                and _cookie_value(scope, _SESSION_COOKIE) is None
-            ):
-                cookie_csrf = _cookie_value(scope, _LOGIN_CSRF_COOKIE)
-                submitted = headers.get(_CSRF_HEADER, b"").decode(
-                    "ascii",
-                    errors="ignore",
+                and (
+                    login_csrf_valid
+                    or _cookie_value(scope, _SESSION_COOKIE) is None
                 )
-                if (
-                    cookie_csrf is None
-                    or not submitted
-                    or not secrets.compare_digest(cookie_csrf, submitted)
-                ):
+            ):
+                if not login_csrf_valid:
                     await _problem_response(
                         403,
                         "csrf_denied",
@@ -347,7 +359,6 @@ class AuthenticationPreflightMiddleware:
                     return
             else:
                 token = _cookie_value(scope, _SESSION_COOKIE)
-                submitted = headers.get(_CSRF_HEADER, b"").decode("ascii", errors="ignore")
                 try:
                     if token is None:
                         raise AuthenticationError("invalid session")
@@ -633,38 +644,43 @@ def create_app(
     def login_source(request: Request) -> str:
         return request.client.host if request.client is not None else "unknown"
 
-    def login_retry_after(
-        request: Request,
-        organization: str,
-        username: str,
-    ) -> int | None:
-        return login_rate_limiter.retry_after(
-            login_source(request),
-            organization,
-            username,
+    def login_rate_limited(retry_after: int) -> JSONResponse:
+        return _problem_response(
+            429,
+            "login_rate_limited",
+            "Too many failed login attempts; retry later.",
+            headers={"Retry-After": str(retry_after)},
         )
 
-    def record_login_failure(
+    def attempt_login(
         request: Request,
         organization: str,
         username: str,
-    ) -> int | None:
-        return login_rate_limiter.record_failure(
-            login_source(request),
-            organization,
-            username,
-        )
+        password: str,
+    ) -> tuple[str, Principal] | JSONResponse:
+        """Count the attempt before it runs, then settle it by its outcome.
 
-    def record_login_success(
-        request: Request,
-        organization: str,
-        username: str,
-    ) -> None:
-        login_rate_limiter.record_success(
-            login_source(request),
-            organization,
-            username,
-        )
+        Returns a rate-limit response instead of a session once the limit is
+        reached. A rejected attempt stays counted; any other outcome is released.
+        """
+
+        identity = (login_source(request), organization, username)
+        retry_after = login_rate_limiter.reserve(*identity)
+        if retry_after is not None:
+            return login_rate_limited(retry_after)
+        try:
+            session = workspace.login(organization, username, password)
+        except (AuthenticationError, ValueError):
+            retry_after = login_rate_limiter.retry_after(*identity)
+            if retry_after is not None:
+                return login_rate_limited(retry_after)
+            raise
+        except Exception:
+            login_rate_limiter.release(*identity)
+            raise
+        login_rate_limiter.release(*identity)
+        login_rate_limiter.record_success(*identity)
+        return session
 
     def enqueue_sync(
         path: Path,
@@ -674,6 +690,10 @@ def create_app(
     ) -> str:
         if model_name not in model_registry:
             raise ValueError("unknown configured model")
+        # Oversized input is capped here so that it still reports its own 413.
+        job_queue.ensure_capacity(
+            min(path.stat().st_size, settings.max_input_bytes)
+        )
         payload, parsed = _read_validated_payload(
             path,
             input_format=input_format,
@@ -703,10 +723,14 @@ def create_app(
             },
         )
 
-    def result_export(stored_job: dict[str, Any]) -> StreamingResponse:
+    def result_export(stored_job: dict[str, Any]) -> Response:
         results = stored_job.get("results")
         if results is None:
-            raise ConflictError("results are unavailable")
+            return _problem_response(
+                409,
+                "conflict",
+                "Results are not available for this job.",
+            )
 
         def body():
             for result in results:
@@ -724,6 +748,14 @@ def create_app(
             headers={
                 "Content-Disposition": f'attachment; filename="{filename}"',
             },
+        )
+
+    @app.exception_handler(_RequestTooLarge)
+    async def request_too_large(_request: Request, _exc: _RequestTooLarge):
+        return _problem_response(
+            413,
+            "request_too_large",
+            "Request body exceeds the configured limit.",
         )
 
     @app.exception_handler(AuthenticationError)
@@ -858,39 +890,15 @@ def create_app(
     ) -> dict[str, Any]:
         if request.cookies.get(_SESSION_COOKIE) is not None:
             raise HTTPException(status_code=400, detail="ambiguous authentication")
-        retry_after = login_retry_after(
+        session = attempt_login(
             request,
             payload.organization,
             payload.username,
+            payload.password,
         )
-        if retry_after is not None:
-            return _problem_response(
-                429,
-                "login_rate_limited",
-                "Too many failed login attempts; retry later.",
-                headers={"Retry-After": str(retry_after)},
-            )
-        try:
-            token, principal = workspace.login(
-                payload.organization,
-                payload.username,
-                payload.password,
-            )
-        except AuthenticationError:
-            retry_after = record_login_failure(
-                request,
-                payload.organization,
-                payload.username,
-            )
-            if retry_after is not None:
-                return _problem_response(
-                    429,
-                    "login_rate_limited",
-                    "Too many failed login attempts; retry later.",
-                    headers={"Retry-After": str(retry_after)},
-                )
-            raise
-        record_login_success(request, payload.organization, payload.username)
+        if isinstance(session, JSONResponse):
+            return session
+        token, principal = session
         return {
             "access_token": token,
             "expires_in": _SESSION_SECONDS,
@@ -942,7 +950,27 @@ def create_app(
 
     @app.get("/api/v1/jobs/{job_id}/export")
     def export_job(job_id: str, token: str = Security(api_token)):
-        return result_export(workspace.get_job(token, job_id))
+        return result_export(workspace.get_job(token, job_id, export=True))
+
+    @app.get("/api/v1/jobs/{job_id}/raw")
+    def export_raw(job_id: str, token: str = Security(api_token)):
+        stored_job = workspace.get_job(token, job_id, include_raw=True)
+        raw_payload = stored_job["raw_payload"]
+        if raw_payload is None:
+            return _problem_response(
+                409,
+                "conflict",
+                "Raw source bytes are not available for this job.",
+            )
+        return Response(
+            raw_payload,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": (
+                    f'attachment; filename="source-{stored_job["id"]}.data"'
+                ),
+            },
+        )
 
     @app.get("/api/v1/jobs/{job_id}/status")
     def job_status(job_id: str, token: str = Security(api_token)) -> dict[str, Any]:
@@ -1156,42 +1184,19 @@ def create_app(
             or not secrets.compare_digest(cookie_csrf, csrf)
         ):
             return login_page(request, "login.expired", status_code=403)
-        retry_after = login_retry_after(request, organization, username)
-        if retry_after is not None:
-            response = login_page(
-                request,
-                "login.rate_limited",
-                status_code=429,
-            )
-            response.headers["Retry-After"] = str(retry_after)
-            return response
+        # The preflight requires the CSRF header, so this caller is always the
+        # page script: it keeps its token, which a re-rendered page would rotate.
         try:
-            token, _principal = workspace.login(organization, username, password)
+            session = attempt_login(request, organization, username, password)
         except (AuthenticationError, ValueError):
-            retry_after = record_login_failure(request, organization, username)
-            if retry_after is not None:
-                if request.headers.get("X-CSRF-Token"):
-                    return _problem_response(
-                        429,
-                        "login_rate_limited",
-                        "Too many failed login attempts; retry later.",
-                        headers={"Retry-After": str(retry_after)},
-                    )
-                response = login_page(
-                    request,
-                    "login.rate_limited",
-                    status_code=429,
-                )
-                response.headers["Retry-After"] = str(retry_after)
-                return response
-            if request.headers.get("X-CSRF-Token"):
-                return _problem_response(
-                    401,
-                    "invalid_credentials",
-                    "Invalid credentials.",
-                )
-            return login_page(request, "login.invalid", status_code=401)
-        record_login_success(request, organization, username)
+            return _problem_response(
+                401,
+                "invalid_credentials",
+                "Invalid credentials.",
+            )
+        if isinstance(session, JSONResponse):
+            return session
+        token, _principal = session
         response = RedirectResponse("/app", status_code=303)
         response.set_cookie(
             _SESSION_COOKIE,
@@ -1299,7 +1304,7 @@ def create_app(
     @app.get("/app/jobs/{job_id}/export", include_in_schema=False)
     def export_job_ui(request: Request, job_id: str):
         token = cookie_token(request)
-        return result_export(workspace.get_job(token, job_id))
+        return result_export(workspace.get_job(token, job_id, export=True))
 
     @app.post("/app/admin/users", include_in_schema=False)
     def create_user_ui(

@@ -12,7 +12,7 @@ from typing import Any
 from .batch import Predictor, process_batch
 from .contracts import BatchResourceLimitError
 from .defaults import DEFAULT_MAX_INPUT_BYTES, DEFAULT_MAX_RECORDS
-from .workspace import Workspace
+from .workspace import MAX_RAW_PAYLOAD_BYTES, Workspace
 
 
 def _read_predictions(
@@ -92,6 +92,15 @@ def classify_file_into_workspace(
 
     workspace.authorize_classification(session_token, retain_raw=store_raw)
     source = Path(input_path)
+    if store_raw:
+        # Refuse before classifying; store_completed_job re-checks the bytes read.
+        source_bytes = source.stat().st_size
+        if source_bytes > MAX_RAW_PAYLOAD_BYTES:
+            raise BatchResourceLimitError(
+                "retained raw source byte count",
+                MAX_RAW_PAYLOAD_BYTES,
+                observed_at_least=source_bytes,
+            )
     with tempfile.TemporaryDirectory(prefix="log-classify-") as directory:
         output_path = Path(directory) / "output.jsonl"
         summary = process_batch(

@@ -60,22 +60,50 @@ class LoginRateLimiter:
         account_key, source_key = self._keys(source, organization, username)
         with self._lock:
             self._prune(now)
-            delays = [
-                self._bucket_retry_after(
-                    self._accounts.get(account_key),
-                    self._account_limit,
-                    now,
-                ),
-                self._bucket_retry_after(
-                    self._sources.get(source_key),
-                    self._source_limit,
-                    now,
-                ),
-            ]
-            if self._overflow_until > now:
-                delays.append(math.ceil(self._overflow_until - now))
-            active = [delay for delay in delays if delay is not None]
-            return max(active) if active else None
+            return self._current_delay(account_key, source_key, now)
+
+    def reserve(
+        self,
+        source: str,
+        organization: str,
+        username: str,
+    ) -> int | None:
+        """Atomically check the limits and count one attempt before it runs.
+
+        Returns a delay when the attempt must not run. Otherwise the attempt
+        already counts as a failure until `release` takes it back, so concurrent
+        attempts cannot all pass the same check.
+        """
+
+        now = self._clock()
+        account_key, source_key = self._keys(source, organization, username)
+        with self._lock:
+            self._prune(now)
+            delay = self._current_delay(account_key, source_key, now)
+            if delay is not None:
+                return delay
+            self._count(account_key, source_key, now)
+            return None
+
+    def release(
+        self,
+        source: str,
+        organization: str,
+        username: str,
+    ) -> None:
+        """Take back one reserved attempt that did not end as a failure."""
+
+        account_key, source_key = self._keys(source, organization, username)
+        with self._lock:
+            for buckets, key in (
+                (self._accounts, account_key),
+                (self._sources, source_key),
+            ):
+                failures = buckets.get(key)
+                if failures:
+                    failures.pop()
+                    if not failures:
+                        del buckets[key]
 
     def record_failure(
         self,
@@ -89,42 +117,8 @@ class LoginRateLimiter:
         account_key, source_key = self._keys(source, organization, username)
         with self._lock:
             self._prune(now)
-            if (
-                account_key not in self._accounts
-                and len(self._accounts) >= self._max_account_buckets
-            ):
-                self._overflow_until = max(
-                    self._overflow_until,
-                    now + self._window_seconds,
-                )
-            else:
-                self._accounts.setdefault(account_key, deque()).append(now)
-            if (
-                source_key not in self._sources
-                and len(self._sources) >= self._max_source_buckets
-            ):
-                self._overflow_until = max(
-                    self._overflow_until,
-                    now + self._window_seconds,
-                )
-            else:
-                self._sources.setdefault(source_key, deque()).append(now)
-            delays = [
-                self._bucket_retry_after(
-                    self._accounts.get(account_key),
-                    self._account_limit,
-                    now,
-                ),
-                self._bucket_retry_after(
-                    self._sources.get(source_key),
-                    self._source_limit,
-                    now,
-                ),
-            ]
-            if self._overflow_until > now:
-                delays.append(math.ceil(self._overflow_until - now))
-            active = [delay for delay in delays if delay is not None]
-            return max(active) if active else None
+            self._count(account_key, source_key, now)
+            return self._current_delay(account_key, source_key, now)
 
     def record_success(
         self,
@@ -137,6 +131,51 @@ class LoginRateLimiter:
         account_key, _source_key = self._keys(source, organization, username)
         with self._lock:
             self._accounts.pop(account_key, None)
+
+    def _count(self, account_key: bytes, source_key: bytes, now: float) -> None:
+        if (
+            account_key not in self._accounts
+            and len(self._accounts) >= self._max_account_buckets
+        ):
+            self._overflow_until = max(
+                self._overflow_until,
+                now + self._window_seconds,
+            )
+        else:
+            self._accounts.setdefault(account_key, deque()).append(now)
+        if (
+            source_key not in self._sources
+            and len(self._sources) >= self._max_source_buckets
+        ):
+            self._overflow_until = max(
+                self._overflow_until,
+                now + self._window_seconds,
+            )
+        else:
+            self._sources.setdefault(source_key, deque()).append(now)
+
+    def _current_delay(
+        self,
+        account_key: bytes,
+        source_key: bytes,
+        now: float,
+    ) -> int | None:
+        delays = [
+            self._bucket_retry_after(
+                self._accounts.get(account_key),
+                self._account_limit,
+                now,
+            ),
+            self._bucket_retry_after(
+                self._sources.get(source_key),
+                self._source_limit,
+                now,
+            ),
+        ]
+        if self._overflow_until > now:
+            delays.append(math.ceil(self._overflow_until - now))
+        active = [delay for delay in delays if delay is not None]
+        return max(active) if active else None
 
     def _keys(
         self,

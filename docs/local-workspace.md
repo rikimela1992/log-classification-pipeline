@@ -83,6 +83,10 @@ log-classify workspace classify ./state/workspace.sqlite3 sample-org owner \
   ./examples/input-valid.jsonl --store-raw
 ```
 
+Raw retention accepts at most 1,000,000 bytes; a larger source is refused
+before classification. An administrator reads retained bytes through
+`GET /api/v1/jobs/{id}/raw` on the [web workspace](web-workspace.md).
+
 Set and inspect a policy, then run the idempotent purge operation:
 
 ```console
@@ -98,6 +102,9 @@ log-classify workspace audit ./state/workspace.sqlite3 sample-org owner
 - The workspace stores no default credentials and never accepts passwords as
   CLI parameters.
 - Raw messages are excluded from predictions and audit details.
+- Passwords use scrypt with N=2^17, r=8, p=1. A stored hash is verified with its
+  own parameters and upgraded on the next successful login. Each derivation
+  takes about 128 MiB, and at most four run at once.
 - Viewer and analyst roles cannot request stored raw source bytes.
 - Job identifiers are random UUIDs and every job query is organization-scoped.
 - Synchronous CLI classification finishes in a temporary directory before the
