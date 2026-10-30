@@ -89,16 +89,16 @@ class LinuxPackagingTests(unittest.TestCase):
     def test_appstream_identity_filename_and_homepage_are_consistent(self) -> None:
         metadata = ElementTree.parse(
             ROOT
-            / "packaging/linux/io.github.rikimela1992.log-classification-pipeline.metainfo.xml"
+            / "packaging/linux/io.github.silirim.log-classification-pipeline.metainfo.xml"
         ).getroot()
         self.assertEqual(
             metadata.findtext("id"),
-            "io.github.rikimela1992.log-classification-pipeline",
+            "io.github.silirim.log-classification-pipeline",
         )
         self.assertEqual(metadata.findtext("developer/name"), "Riccardo Melini")
         self.assertEqual(
             metadata.findtext("url"),
-            "https://github.com/rikimela1992/log-classification-pipeline",
+            "https://github.com/silirim/log-classification-pipeline",
         )
 
 

@@ -5,7 +5,7 @@ Version:        0.1.0
 Release:        0.alpha.1%{?dist}
 Summary:        Alpha local fail-closed log classification workspace
 License:        MIT
-URL:            https://github.com/rikimela1992/log-classification-pipeline
+URL:            https://github.com/silirim/log-classification-pipeline
 Source0:        log-classification-pipeline-stage.tar.gz
 BuildArch:      x86_64
 Requires(pre):  shadow-utils
@@ -55,7 +55,7 @@ systemctl daemon-reload >/dev/null 2>&1 || true
 /usr/lib/systemd/system/log-classification-pipeline.service
 /usr/share/applications/log-classification-pipeline.desktop
 /usr/share/icons/hicolor/scalable/apps/log-classification-pipeline.svg
-/usr/share/metainfo/io.github.rikimela1992.log-classification-pipeline.metainfo.xml
+/usr/share/metainfo/io.github.silirim.log-classification-pipeline.metainfo.xml
 %attr(0700,log-classify,log-classify) %dir /var/lib/log-classification-pipeline
 
 %changelog

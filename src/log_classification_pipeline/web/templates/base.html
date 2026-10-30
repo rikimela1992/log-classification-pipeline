@@ -15,7 +15,7 @@
       <form action="/app/locale" method="post" class="locale-form" data-secure-form>
         <input type="hidden" name="target" value="{{ locale_target }}">
         <label><span class="visually-hidden">{{ t("nav.language") }}</span>
-          <select name="locale" aria-label="{{ t('nav.language') }}" onchange="this.form.requestSubmit()">
+          <select name="locale" aria-label="{{ t('nav.language') }}" data-auto-submit>
             {% for code in locales %}<option value="{{ code }}" {% if code == locale %}selected{% endif %}>{{ code|upper }}</option>{% endfor %}
           </select>
         </label>

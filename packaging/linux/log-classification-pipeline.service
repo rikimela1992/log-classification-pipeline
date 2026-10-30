@@ -1,6 +1,6 @@
 [Unit]
 Description=Log Classification Pipeline alpha local workspace
-Documentation=https://github.com/rikimela1992/log-classification-pipeline
+Documentation=https://github.com/silirim/log-classification-pipeline
 After=local-fs.target
 
 [Service]

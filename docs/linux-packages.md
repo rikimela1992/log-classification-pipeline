@@ -87,7 +87,7 @@ Release candidates produced after this hardening also carry a GitHub artifact
 provenance attestation. Verify a downloaded package against this repository:
 
 ```console
-gh attestation verify ./PACKAGE --repo rikimela1992/log-classification-pipeline
+gh attestation verify ./PACKAGE --repo silirim/log-classification-pipeline
 ```
 
 The AppImage builder and type-2 runtime are fetched from fixed GitHub release

@@ -109,8 +109,9 @@ OS account, swap, a core dump, or malicious code in the process.
 
 ## HTTP API
 
-The interactive documentation is available locally at `/api/v1/docs`. API
-clients create a short-lived session with `POST /api/v1/sessions` and send the
+The OpenAPI document is served at `/api/v1/openapi.json`. Interactive Swagger UI
+is disabled because it would load third-party assets that the content security
+policy refuses. API clients create a short-lived session with `POST /api/v1/sessions` and send the
 returned opaque value as `Authorization: Bearer <token>`. Tokens are displayed
 only in the session-creation response; the database stores their SHA-256
 digests. `DELETE /api/v1/session` revokes the current session.
@@ -136,6 +137,7 @@ available only after terminal success.
 | `POST /api/v1/jobs/{id}/cancel` | Cancel queued work or request a chunk-boundary cancellation |
 | `GET /api/v1/jobs/{id}/export` | Export available results as NDJSON |
 | `/api/v1/admin/*` | Admin-only users, retention, purge, and audit operations |
+| `PATCH /api/v1/admin/users/{id}` | Change role, disabled state, or password and revoke that user's sessions |
 
 `GET /api/v1/models` is available to every authenticated role. It returns only
 public configuration metadata: adapter type, stable model/profile revisions,

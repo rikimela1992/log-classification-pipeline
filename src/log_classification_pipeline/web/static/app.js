@@ -57,6 +57,13 @@ document.addEventListener("submit", async (event) => {
   }
 });
 
+document.addEventListener("change", (event) => {
+  const control = event.target;
+  if (control instanceof HTMLSelectElement && control.hasAttribute("data-auto-submit")) {
+    control.form?.requestSubmit();
+  }
+});
+
 const monitor = document.querySelector("[data-job-monitor]");
 if (monitor instanceof HTMLElement) {
   const progress = monitor.querySelector("[data-progress]");

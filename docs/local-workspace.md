@@ -23,7 +23,7 @@ backup/restore procedures, and a server database.
 | Create and complete classification jobs | yes | yes | no |
 | Request retention of original source bytes | yes | no | no |
 | Access an optionally retained raw payload | yes | no | no |
-| Create users | yes | no | no |
+| Create users, change roles, disable accounts, reset passwords | yes | no | no |
 | Change or execute retention policy | yes | no | no |
 | Read the audit trail | yes | no | no |
 
