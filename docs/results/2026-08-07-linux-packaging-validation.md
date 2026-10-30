@@ -32,7 +32,7 @@ candidates are built separately on the declared GitHub Actions runners.
 
 ## CI result
 
-The [successful packaging workflow](https://github.com/rikimela1992/log-classification-pipeline/actions/runs/31196447046)
+The [successful packaging workflow](https://github.com/silirim/log-classification-pipeline/actions/runs/31196447046)
 built and smoke-tested the portable archive, DEB, AppImage, and native Fedora
 RPM. Its final job merged both build families and verified the combined
 `SHA256SUMS` manifest.

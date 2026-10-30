@@ -10,16 +10,16 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/rikimela1992/log-classification-pipeline/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/rikimela1992/log-classification-pipeline/actions/workflows/test.yml/badge.svg"></a>
-  <a href="https://github.com/rikimela1992/log-classification-pipeline/releases"><img alt="Release" src="https://img.shields.io/github/v/release/rikimela1992/log-classification-pipeline?include_prereleases&sort=semver"></a>
-  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/rikimela1992/log-classification-pipeline"></a>
+  <a href="https://github.com/silirim/log-classification-pipeline/actions/workflows/test.yml"><img alt="Tests" src="https://github.com/silirim/log-classification-pipeline/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/silirim/log-classification-pipeline/releases"><img alt="Release" src="https://img.shields.io/github/v/release/silirim/log-classification-pipeline?include_prereleases&sort=semver"></a>
+  <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/github/license/silirim/log-classification-pipeline"></a>
   <img alt="Python 3.12 or newer" src="https://img.shields.io/badge/python-3.12%2B-3776AB">
   <img alt="Status: alpha" src="https://img.shields.io/badge/status-alpha-orange">
 </p>
 
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
-  <a href="https://github.com/rikimela1992/log-classification-pipeline/releases">Downloads</a> ·
+  <a href="https://github.com/silirim/log-classification-pipeline/releases">Downloads</a> ·
   <a href="#project-guide">Documentation</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
@@ -43,7 +43,7 @@
 
 ## Quick start
 
-Download **[v0.1.0-alpha.1](https://github.com/rikimela1992/log-classification-pipeline/releases/tag/v0.1.0-alpha.1)** for 64-bit Linux:
+Download **[v0.1.0-alpha.1](https://github.com/silirim/log-classification-pipeline/releases/tag/v0.1.0-alpha.1)** for 64-bit Linux:
 
 | Package | Best for |
 | --- | --- |
