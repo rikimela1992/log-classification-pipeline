@@ -47,8 +47,8 @@ systemctl daemon-reload >/dev/null 2>&1 || true
 %doc /usr/share/doc/log-classification-pipeline/WEB_WORKSPACE.md
 %doc /usr/share/doc/log-classification-pipeline/PYTHON_LICENSE.txt
 %doc /usr/share/doc/log-classification-pipeline/THIRD_PARTY_PYTHON_LICENSES.fedora.json
-%doc /usr/share/doc/log-classification-pipeline/log-classification-pipeline-0.1.0-alpha.1.fedora.bundle.spdx.json
-%doc /usr/share/doc/log-classification-pipeline/log-classification-pipeline-0.1.0-alpha.1.fedora.sbom.cdx.json
+%doc /usr/share/doc/log-classification-pipeline/log-classification-pipeline-0.1.0-alpha.2.fedora.bundle.spdx.json
+%doc /usr/share/doc/log-classification-pipeline/log-classification-pipeline-0.1.0-alpha.2.fedora.sbom.cdx.json
 %doc /usr/share/doc/log-classification-pipeline/native-licenses-fedora41
 /usr/bin/log-classification-pipeline
 /usr/lib/log-classification-pipeline
