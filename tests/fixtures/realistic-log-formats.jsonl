@@ -19,3 +19,4 @@
 {"message":"nginx: [emerg] bind() to 0.0.0.0:80 failed (98: Address already in use)","expected_subsystem":"compute","expected_severity":"error"}
 {"message":"Accesso negato per l'utente admin: password errata","expected_subsystem":"auth","expected_severity":"security_event"}
 {"message":"level=warn msg=\"retrying upstream request\" component=worker","expected_subsystem":"compute","expected_severity":"warning"}
+{"message":"Oct 30 12:06:00 host1 sshd-session[1094]: Connection closed by 198.51.100.7 port 61887","expected_subsystem":"auth","expected_severity":"routine"}

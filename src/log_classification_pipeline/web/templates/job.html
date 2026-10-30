@@ -1,9 +1,9 @@
 {% extends "base.html" %}
-{% block title %}{{ t("job.heading", id=job.id) }} · {{ t("app.title") }}{% endblock %}
+{% block title %}{{ t("job.heading", id=job.id[:8]) }} · {{ t("app.title") }}{% endblock %}
 {% block content %}
 <p><a href="/app">← {{ t("job.back") }}</a></p>
 <section class="hero compact-hero">
-  <div><p class="eyebrow">{{ t("job.eyebrow") }}</p><h1>{{ t("job.heading", id=job.id) }}</h1></div>
+  <div><p class="eyebrow">{{ t("job.eyebrow") }}</p><h1 title="{{ job.id }}">{{ t("job.heading", id=job.id[:8]) }}</h1></div>
   <span class="status status-{{ job.status }}">{{ t("status." + job.status) }}</span>
 </section>
 <section class="metrics">

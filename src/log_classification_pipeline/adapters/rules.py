@@ -33,7 +33,7 @@ _HTTP_ATTACK = re.compile(
 
 _PROGRAM_SUBSYSTEMS = {
     "auth": (
-        "sshd", "sudo", "su", "login", "gdm", "lightdm", "polkitd", "ftpd",
+        "sshd", "sshd-session", "sshd-auth", "sudo", "su", "login", "gdm", "lightdm", "polkitd", "ftpd",
         "vsftpd", "proftpd", "systemd-logind", "passwd", "useradd", "saslauthd",
     ),
     "firewall": (
