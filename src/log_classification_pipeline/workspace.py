@@ -303,7 +303,14 @@ class Workspace:
         self,
         *,
         require_schema: bool = True,
+        immediate: bool = False,
     ) -> Iterator[sqlite3.Connection]:
+        """Open a checked connection; `immediate` takes the write lock up front.
+
+        The legacy sqlite3 transaction mode begins only at the first write, so a
+        read-then-write sequence needs `immediate` to see the state it changes.
+        """
+
         self._validate_database_file()
         database_uri = f"file:{quote(str(self.database_path.absolute()))}?mode=rw"
         connection = sqlite3.connect(
@@ -339,6 +346,8 @@ class Workspace:
                 connection.execute("PRAGMA journal_mode = DELETE")
                 connection.execute("PRAGMA synchronous = FULL")
             with connection:
+                if immediate:
+                    connection.execute("BEGIN IMMEDIATE")
                 yield connection
         finally:
             connection.close()
@@ -1211,7 +1220,7 @@ class Workspace:
         except (TypeError, ValueError) as exc:
             raise ValueError("results must be JSON serializable") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             job_row = connection.execute(
                 """SELECT input_records, result_retention_days FROM jobs
                    WHERE id = ? AND organization_id = ? AND status = ?
@@ -1417,7 +1426,7 @@ class Workspace:
         except (AttributeError, UnicodeEncodeError) as exc:
             raise NotFoundError("queued job not found") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, organization_id, created_by, model_name,
                           source_sha256, input_records, state_version
@@ -1476,7 +1485,7 @@ class Workspace:
         except (AttributeError, UnicodeEncodeError) as exc:
             raise NotFoundError("running job not found") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, status, input_records, processed_records,
                           cancel_requested_at, state_version
@@ -1548,7 +1557,7 @@ class Workspace:
         except (TypeError, ValueError, UnicodeEncodeError) as exc:
             raise ValueError("results and capability must be valid") from exc
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, organization_id, created_by, source_sha256,
                           input_records, result_retention_days, state_version
@@ -1617,7 +1626,7 @@ class Workspace:
             if failure_code == "cancelled"
             else JobStatus.FAILED.value
         )
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, organization_id, created_by, result_retention_days,
                           state_version FROM jobs
@@ -1650,7 +1659,7 @@ class Workspace:
                 ),
             )
             if cursor.rowcount != 1:
-                return False
+                raise ConflictError("job failure lost a concurrent transition")
             self._audit(
                 connection,
                 row["organization_id"],
@@ -1675,7 +1684,7 @@ class Workspace:
         principal = self.principal(token, now=now)
         self._require(principal, Role.ADMIN, Role.ANALYST)
         instant = now or _utc_now()
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             row = connection.execute(
                 """SELECT id, created_by, status, result_retention_days, state_version
                    FROM jobs WHERE id = ? AND organization_id = ?
@@ -1709,7 +1718,9 @@ class Workspace:
                         row["state_version"],
                     ),
                 )
-                changed = cursor.rowcount == 1
+                if cursor.rowcount != 1:
+                    raise ConflictError("job cancellation lost a concurrent transition")
+                changed = True
             elif row["status"] == JobStatus.RUNNING.value:
                 target_status = JobStatus.CANCELLING.value
                 cursor = connection.execute(
@@ -1725,7 +1736,9 @@ class Workspace:
                         row["state_version"],
                     ),
                 )
-                changed = cursor.rowcount == 1
+                if cursor.rowcount != 1:
+                    raise ConflictError("job cancellation lost a concurrent transition")
+                changed = True
             if changed:
                 self._audit(
                     connection,
@@ -1788,7 +1801,7 @@ class Workspace:
 
         instant = now or _utc_now()
         recovered = 0
-        with self._connect() as connection:
+        with self._connect(immediate=True) as connection:
             rows = connection.execute(
                 """SELECT id, organization_id, result_retention_days, state_version
                    FROM jobs WHERE status IN (?, ?, ?)""",

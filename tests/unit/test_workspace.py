@@ -5,6 +5,8 @@ import os
 import sqlite3
 import stat
 import tempfile
+import threading
+import time
 import unittest
 from contextlib import closing
 from datetime import UTC, datetime, timedelta
@@ -776,6 +778,69 @@ class WorkspaceTestCase(unittest.TestCase):
             ).fetchall()
         self.assertEqual(tables, [("unrelated",)])
         self.assertEqual(unrelated.read_bytes(), bytes_before)
+
+    def running_job(self) -> tuple[str, str]:
+        job_id, capability = self.workspace.enqueue_classification_job(
+            self.admin_token,
+            digest(b"payload"),
+            2,
+            "rules",
+            now=NOW,
+        )
+        self.workspace.claim_classification_job(capability, "worker-test", now=NOW)
+        return job_id, capability
+
+    def race_with_uncommitted_write(self, write_sql: str, operation) -> dict[str, object]:
+        """Run `operation` while another writer holds an uncommitted state change."""
+
+        with closing(sqlite3.connect(self.database_path, isolation_level=None)) as writer:
+            writer.execute("BEGIN IMMEDIATE")
+            writer.execute(write_sql)
+            outcome: dict[str, object] = {}
+
+            def contender() -> None:
+                try:
+                    outcome["value"] = operation()
+                except Exception as exc:  # reported by the assertion below
+                    outcome["error"] = exc
+
+            thread = threading.Thread(target=contender)
+            thread.start()
+            # Long enough for a read outside the transaction to see stale state.
+            time.sleep(0.3)
+            writer.execute("COMMIT")
+            thread.join(10.0)
+        self.assertFalse(thread.is_alive())
+        self.assertNotIn("error", outcome)
+        return outcome
+
+    def test_failure_terminates_a_job_cancelled_while_it_was_racing(self) -> None:
+        job_id, capability = self.running_job()
+        outcome = self.race_with_uncommitted_write(
+            "UPDATE jobs SET status = 'cancelling', cancel_requested_at = 'synthetic', "
+            "state_version = state_version + 1",
+            lambda: self.workspace.fail_classification_job(
+                capability,
+                "internal_error",
+                now=NOW,
+            ),
+        )
+        self.assertIs(outcome["value"], True)
+        status = self.workspace.get_job_status(self.admin_token, job_id, now=NOW)
+        self.assertEqual(status["status"], JobStatus.FAILED.value)
+
+    def test_cancellation_is_not_dropped_by_a_racing_progress_update(self) -> None:
+        job_id, capability = self.running_job()
+        outcome = self.race_with_uncommitted_write(
+            "UPDATE jobs SET processed_records = 1, state_version = state_version + 1",
+            lambda: self.workspace.request_job_cancellation(
+                self.admin_token,
+                job_id,
+                now=NOW,
+            ),
+        )
+        self.assertEqual(outcome["value"]["status"], JobStatus.CANCELLING.value)
+        self.assertTrue(self.workspace.classification_cancel_requested(capability))
 
 
 class RetentionPolicyValidationTests(unittest.TestCase):
