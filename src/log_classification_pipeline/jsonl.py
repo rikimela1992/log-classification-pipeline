@@ -124,6 +124,14 @@ def read_jsonl(
                 )
             )
             continue
+        except RecursionError:
+            issues.append(
+                ValidationIssue(
+                    line_number=line_number,
+                    reason="invalid JSON: nesting is too deep",
+                )
+            )
+            continue
 
         if not isinstance(value, dict):
             issues.append(

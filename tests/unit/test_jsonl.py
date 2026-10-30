@@ -129,6 +129,17 @@ class JsonlTests(unittest.TestCase):
                     with self.assertRaises(ValueError):
                         read_jsonl(path, max_records=invalid_limit)
 
+    def test_excessive_nesting_is_a_located_validation_issue(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "input.jsonl"
+            path.write_bytes(
+                b'{"message":"synthetic"}\n' + b"[" * 200_000 + b"\n",
+            )
+            with self.assertRaises(BatchValidationError) as caught:
+                read_jsonl(path)
+        self.assertEqual(caught.exception.issues[0].line_number, 2)
+        self.assertIn("too deep", caught.exception.issues[0].reason)
+
 
 if __name__ == "__main__":
     unittest.main()
