@@ -1382,6 +1382,7 @@ class WebApplicationTests(unittest.TestCase):
         self.assertIn("data-auto-submit", page.text)
         self.assertEqual(self.client.get("/api/v1/docs").status_code, 404)
         self.assertEqual(self.client.get("/api/v1/openapi.json").status_code, 200)
+        self.assertEqual(self.client.get("/favicon.ico").status_code, 204)
 
     def test_admin_user_retention_and_request_limit(self) -> None:
         token = self.api_login("owner", PASSWORD)

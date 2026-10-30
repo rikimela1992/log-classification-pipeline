@@ -1187,6 +1187,10 @@ def create_app(
             context["audit"] = workspace.list_audit_events(token, limit=20)
         return context
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    def favicon() -> Response:
+        return Response(status_code=204)
+
     @app.get("/", include_in_schema=False)
     def root():
         return RedirectResponse("/app", status_code=303)
