@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import subprocess
+import tempfile
 import tomllib
 import unittest
 from pathlib import Path
@@ -28,6 +29,45 @@ class LinuxPackagingTests(unittest.TestCase):
             with self.subTest(script=script.name):
                 self.assertTrue(os.access(script, os.X_OK))
                 subprocess.run(["sh", "-n", script], check=True)
+
+    def run_postinst(self, *arguments: str) -> list[str]:
+        with tempfile.TemporaryDirectory() as directory:
+            stubs = Path(directory)
+            calls = stubs / "calls"
+            calls.touch()
+            for name in ("chown", "chmod", "getent"):
+                stub = stubs / name
+                stub.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                stub.chmod(0o700)
+            systemctl = stubs / "systemctl"
+            systemctl.write_text(
+                f'#!/bin/sh\necho "$*" >> "{calls}"\n',
+                encoding="utf-8",
+            )
+            systemctl.chmod(0o700)
+            subprocess.run(
+                ["/bin/sh", ROOT / "packaging/debian/postinst", *arguments],
+                check=True,
+                env={"PATH": str(stubs)},
+            )
+            return calls.read_text(encoding="utf-8").splitlines()
+
+    def test_deb_upgrade_restarts_only_an_active_service(self) -> None:
+        unit = "log-classification-pipeline.service"
+        self.assertEqual(self.run_postinst("configure"), ["daemon-reload"])
+        self.assertEqual(
+            self.run_postinst("configure", "0.1.0~alpha.1"),
+            ["daemon-reload", f"try-restart {unit}"],
+        )
+
+    def test_rpm_upgrade_restarts_only_an_active_service(self) -> None:
+        spec = (
+            ROOT / "packaging/linux/log-classification-pipeline.spec"
+        ).read_text(encoding="utf-8")
+        postun = spec.split("%postun\n", 1)[1].split("%files", 1)[0]
+        self.assertIn('if [ "$1" -ge 1 ]; then', postun)
+        self.assertIn("systemctl try-restart log-classification-pipeline.service", postun)
+        self.assertNotIn("enable", postun.replace("--now", ""))
 
     def test_launcher_has_guided_setup_without_default_credentials(self) -> None:
         launcher = (

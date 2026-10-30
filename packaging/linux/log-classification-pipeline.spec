@@ -40,6 +40,9 @@ fi
 
 %postun
 systemctl daemon-reload >/dev/null 2>&1 || true
+if [ "$1" -ge 1 ]; then
+  systemctl try-restart log-classification-pipeline.service >/dev/null 2>&1 || true
+fi
 
 %files
 %license /usr/share/doc/log-classification-pipeline/LICENSE
