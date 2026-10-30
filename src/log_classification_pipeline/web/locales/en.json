@@ -22,7 +22,7 @@
   "classify.file": "Log file",
   "classify.formats": "JSONL, NDJSON, TXT, LOG or CSV · up to {max_mib} MiB and {max_records} records",
   "classify.model": "Configured model",
-  "classify.model_help": "The rules baseline is selected first and loads no model artifact. Every zero-shot profile is experimental and may abstain.",
+  "classify.model_help": "The format rules are selected first and loads no model artifact. Every zero-shot profile is experimental and may abstain.",
   "classify.submit": "Validate and queue",
   "model.rules.label": "Log format rules — safe default",
   "model.rules.description": "Fast offline rules for syslog, web, and application logs. No model download.",

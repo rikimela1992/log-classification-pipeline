@@ -18,7 +18,7 @@ validation, orchestration, and atomic publication path.
 | contracts.py | Validate stable input fields and predictor output mappings | Return line-specific issues or raise a predictor contract error |
 | batch.py | Validate before prediction, chunk records, report staged progress, check cooperative cancellation, consume at most one excess output, enforce one output per input | Stop before publication if input, cancellation, or predictor behavior is invalid |
 | atomic.py | Encode JSONL, apply permissions, sync a temporary file, publish, sync the directory | Attempt pre-publication temporary cleanup; distinguish committed failures |
-| adapters/rules.py | Provide a deterministic wiring baseline for synthetic demos | Abstain when subsystem evidence is absent |
+| adapters/rules.py | Classify common log formats deterministically | Abstain when subsystem evidence is absent |
 | adapters/zero_shot.py | Lazy-load a pinned NLI encoder, offline by default | Fail before publication on missing artifacts or invalid model output |
 | model_profiles.py | Resolve versioned model, prompt, language, and taxonomy configurations | Reject unknown profiles before artifact loading |
 | model_artifact.py | Create bounded SHA-256 inventories and private verified copies of local models | Reject identity drift, unsafe entries, concurrent changes, or any file mismatch before model import |

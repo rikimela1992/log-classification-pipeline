@@ -31,6 +31,8 @@ still change interfaces.
 - Keep a failed first setup from leaving an empty workspace that blocks login.
 - Restore the language selector under the content security policy.
 - Remove the Swagger page, which that policy cannot render; OpenAPI JSON remains.
+- Rewrite the rules engine for real log formats and measure it on public logs.
+- Add a job summary, an attention list, and a `report` command.
 
 ## 0.1.0-alpha.1 — 2026-08-08
 

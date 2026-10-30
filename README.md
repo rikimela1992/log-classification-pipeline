@@ -18,30 +18,53 @@
 </p>
 
 <p align="center">
-  <a href="#quick-start">Quick start</a> ·
+  <a href="#try-it-in-a-minute">Try it</a> ·
   <a href="https://github.com/silirim/log-classification-pipeline/releases">Downloads</a> ·
   <a href="#project-guide">Documentation</a> ·
   <a href="SECURITY.md">Security</a>
 </p>
 
 > [!WARNING]
-> This is alpha software, not a production-ready SIEM. It is intended for
-> local, bounded analysis and ships no logs, datasets, model weights, or default
-> credentials.
+> Alpha software for local analysis, not a SIEM. It ships no logs, datasets,
+> model weights, or default credentials.
 
 <p align="center">
   <a href="docs/assets/dashboard-preview.png">
-    <img src="docs/assets/dashboard-preview.png" alt="Authenticated dashboard showing synthetic classified log data" width="100%">
+    <img src="docs/assets/dashboard-preview.png" alt="Job summary showing severity counts and the records that need attention, on synthetic data" width="100%">
   </a>
   <br>
-  <sub>Authenticated local dashboard · synthetic data only</sub>
+  <sub>Job summary · synthetic data only</sub>
 </p>
+
+## Try it in a minute
+
+No model, no account, no network. Python 3.12+ is enough:
+
+```console
+python3 -m venv .venv
+.venv/bin/python -m pip install --no-deps .
+.venv/bin/log-classify classify examples/sample-server.log out.jsonl
+.venv/bin/log-classify report examples/sample-server.log out.jsonl
+```
+
+```text
+Needs attention (26 records):
+      14 x security_event auth      record 5: ... sshd[4113]: Failed password for invalid user admin ...
+       1 x security_event auth      record 24: ... sudo: deploy : 3 incorrect password attempts ...
+       1 x error          storage   record 26: ... smartd[801]: Device: /dev/sda [SAT], FAILED SMART self-check ...
+```
+
+Repeated events collapse into one pattern, worst first. To check your own machine:
+
+```console
+journalctl --since today --no-pager -o short > today.log
+```
 
 | Local by default | Fail closed | Multiple interfaces |
 | --- | --- | --- |
-| Loopback-only browser app, local SQLite workspace, and offline rules baseline. | The whole input and every prediction must pass validation before a batch is published. | Use the dashboard, automate through the API, or integrate the Python CLI. |
+| Loopback-only browser app, local SQLite workspace, and offline format rules. | The whole input and every prediction must pass validation before a batch is published. | Use the dashboard, automate through the API, or integrate the Python CLI. |
 
-## Quick start
+## Install
 
 Download **[v0.1.0-alpha.2](https://github.com/silirim/log-classification-pipeline/releases/tag/v0.1.0-alpha.2)** for 64-bit Linux:
 
@@ -56,7 +79,7 @@ DEB and RPM packages add a desktop launcher. On first launch, a guided setup
 creates a private workspace, administrator account, and password, then opens
 the app locally.
 
-Packages include the web workspace and offline rules baseline. They do **not**
+Packages include the web workspace and offline format rules. They do **not**
 include a model, tokenizer, Transformers, PyTorch, or dataset. See the
 [Linux install guide](docs/linux-packages.md) for checksum verification,
 AppImage permissions, and optional systemd setup.
@@ -90,9 +113,17 @@ destination is published.
 
 | Profile | Purpose | Included |
 | --- | --- | --- |
-| `rules` | Deterministic offline baseline and safest first run | Yes |
+| `rules` | Reads syslog, web, and application log formats in English, Italian, French, and Spanish | Yes |
 | English DeBERTa | Experimental zero-shot classification | No |
 | Multilingual NLI | Experimental English, Italian, French, and Spanish analysis | No |
+
+The rules are the recommended engine. On a blind sample of 104 real lines from
+public logs they reached 91% precision and 69% recall on lines needing attention,
+72% coverage, and no false security alert. It is one rater's small sample, and
+security recall is not measured there: read the
+[evaluation](docs/results/2026-10-30-rules-real-log-evaluation.md) before relying
+on it. The zero-shot profiles abstained on most or all records of the synthetic fixtures
+at their default threshold.
 
 Model downloads are disabled by default. Local model directories require a
 verified manifest and stay outside the repository. Published evaluations are
@@ -101,14 +132,6 @@ development measurements, not accuracy or production claims. Read
 [multilingual evaluation](docs/results/2026-08-07-multilingual-model-evaluation.md).
 
 ## For developers
-
-Python 3.12+ is required. The smallest local setup uses no downloaded model:
-
-```console
-python3 -m venv .venv
-.venv/bin/python -m pip install --no-deps .
-.venv/bin/log-classify doctor
-```
 
 Install the optional authenticated web interface with `.[web]`. Passwords are
 prompted interactively and never accepted as command-line arguments. See

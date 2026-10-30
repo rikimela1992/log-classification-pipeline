@@ -55,7 +55,7 @@ username, or client-address strings. It is bounded and shared by the API and
 browser login paths, but resets at process restart and is not a distributed
 rate limit.
 
-The rules baseline is available without model dependencies. To expose the
+The format rules are available without model dependencies. To expose the
 known profiles in the selector, install both extras and enable them. Predictors
 remain lazy and downloads remain disabled by default:
 
